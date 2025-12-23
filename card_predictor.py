@@ -767,6 +767,7 @@ class CardPredictor:
         self._save_all_data()
 
     # --- VERIFICATION LOGIQUE ---
+    # --- VERIFICATION LOGIQUE ---
 
     def verify_prediction(self, message: str) -> Optional[Dict]:
         """Vérifie une prédiction (message normal)"""
@@ -777,25 +778,27 @@ class CardPredictor:
         return self._verify_prediction_common(message, is_edited=True)
 
     def check_costume_in_first_parentheses(self, message: str, predicted_costume: str) -> bool:
-        """Vérifie si le costume prédit est dans TOUTES les cartes du PREMIER groupe"""
+        """Vérifie si le costume prédit apparaît dans le PREMIER parenthèses"""
         # Récupérer TOUTES les cartes du premier groupe
-        all_cards_in_first_group = self.get_all_cards_in_first_group(message)
+        all_cards = self.get_all_cards_in_first_group(message)
         
-        if not all_cards_in_first_group:
+        if not all_cards:
             logger.debug("🎯 Aucune carte trouvée dans le premier groupe")
             return False
+        
+        # Log pour montrer toutes les cartes vues
+        logger.info(f"🎯 Vérification: {len(all_cards)} carte(s) dans premier groupe: {', '.join(all_cards)}")
         
         # Normaliser le costume prédit
         normalized_costume = predicted_costume.replace("❤️", "♥️")
         
-        # Vérifier si au moins UNE carte du premier groupe a le costume prédit
-        for card in all_cards_in_first_group:
-            card_suit = card[-1]  # Le dernier caractère est l'enseigne
-            if card_suit == normalized_costume:
-                logger.info(f"✅ Costume {normalized_costume} trouvé dans le carte {card} du PREMIER groupe")
+        # Vérifier si au moins UNE carte du groupe a le costume prédit
+        for card in all_cards:
+            if card.endswith(normalized_costume):
+                logger.info(f"✅ Costume {normalized_costume} trouvé dans carte {card}")
                 return True
         
-        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans les cartes du premier groupe: {all_cards_in_first_group}")
+        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans {', '.join(all_cards)}")
         return False
 
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
@@ -803,22 +806,14 @@ class CardPredictor:
         self.check_and_send_reports()
         
         game_number = self.extract_game_number(message)
-        if not game_number: 
-            logger.debug("❌ Aucun numéro de jeu trouvé")
-            return None
-        
-        logger.info(f"🔍 Vérification du jeu {game_number}...")
+        if not game_number: return None
         
         # Validation Structurelle
         is_structurally_valid = self.is_final_result_structurally_valid(message)
         
-        if not is_structurally_valid: 
-            logger.debug(f"⚠️ Structure invalide pour jeu {game_number}")
-            return None
+        if not is_structurally_valid: return None
 
-        if not self.predictions: 
-            logger.debug("⚠️ Aucune prédiction en attente")
-            return None
+        if not self.predictions: return None
         
         verification_result = None
 
@@ -847,11 +842,53 @@ class CardPredictor:
                         status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
                         updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
-                        logger.info(f"✅ SUCCÈS: Jeu {predicted_game} trouvé à +{offset} avec statut {status_symbol}")
                         prediction['status'] = 'won'
                         prediction['verification_count'] = offset
                         prediction['final_message'] = updated_message
                         self.consecutive_fails = 0
+                        self._save_all_data()
+
+                        verification_result = {
+                            'type': 'edit_message',
+                            'predicted_game': str(predicted_game),
+                            'new_message': updated_message,
+                            'message_id_to_edit': prediction.get('message_id')
+                        }
+                        verification_found = True
+                        break
+            
+            # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
+            if verification_found:
+                break
+            
+            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
+            if game_number > predicted_game + 2:
+                status_symbol = "❌"
+                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
+
+                prediction['status'] = 'lost'
+                prediction['final_message'] = updated_message
+                
+                if prediction.get('is_inter'):
+                    self._apply_quarantine(prediction)
+                    self.is_inter_mode_active = False 
+                    logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
+                else:
+                    self.consecutive_fails += 1
+                    if self.consecutive_fails >= 2:
+                        self.single_trigger_until = time.time() + 3600
+                        self.analyze_and_set_smart_rules(force_activate=True) 
+                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER (TOP1 uniquement pendant 1h).")
+                
+                self._save_all_data()
+
+                verification_result = {
+                    'type': 'edit_message',
+                    'predicted_game': str(predicted_game),
+                    'new_message': updated_message,
+                    'message_id_to_edit': prediction.get('message_id')
+                }
+                break
                         
                         # 🔒 QUARANTAINE AUSSI POUR ✅2️⃣ : Si offset=2 ET is_inter, mettre en quarantaine
                         if offset == 2 and prediction.get('is_inter'):
