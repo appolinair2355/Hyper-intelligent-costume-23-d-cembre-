@@ -548,12 +548,14 @@ class TelegramHandlers:
                             if mid_to_edit and pred_channel:
                                 self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
 
-            # 3. Callbacks
+            #            # 3. Callbacks
             elif 'callback_query' in update:
                 self._handle_callback_query(update['callback_query'])
-            
+
             # 4. Ajout au groupe (inchangé)
             elif 'my_chat_member' in update:
+                ...
+
                 m = update['my_chat_member']
                 if m['new_chat_member']['status'] in ['member', 'administrator']:
                     bot_id_part = self.bot_token.split(':')[0]
