@@ -511,7 +511,7 @@ class TelegramHandlers:
                         if pred_channel:
                             mid = self.send_message(pred_channel, txt)
                             if mid:
-                                trigger = self.card_predictor._last_trigger_used
+                                trigger = self.card_predictor._last_trigger_used or '?'  # ✅ Assurer str, jamais None
                                 self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter or False, trigger_used=trigger)
 
             # 2. Messages édités (CRITIQUE pour vérification)

@@ -102,66 +102,151 @@ def setup_webhook():
 
 def reset_non_inter_predictions():
     """
-    Réinitialise les prédictions automatiques (non-INTER) à 00h59 heure du Bénin.
-    Garde les données 'collected_games.json' et 'inter_data.json' intactes.
+    Reset complet à 00h59 heure du Bénin:
+    - EFFACE TOUT (prédictions, INTER, smart rules, collecte, etc.)
+    - GARDE SEULEMENT les IDs canaux
+    - RÉACTIVE le mode INTER automatiquement
+    - RÉINITIALISE la collecte à zéro
     """
     try:
-        predictions_file = 'predictions.json'
+        # Fichiers à EFFACER COMPLÈTEMENT
+        files_to_clear = [
+            'predictions.json',
+            'inter_data.json',
+            'smart_rules.json',
+            'collected_games.json',
+            'sequential_history.json',
+            'pending_edits.json',
+            'quarantined_rules.json',
+            'last_prediction_time.json',
+            'last_predicted_game_number.json',
+            'consecutive_fails.json',
+            'single_trigger_until.json',
+            'inter_mode_status.json',
+            'last_analysis_time.json',
+            'last_inter_update.json',
+            'last_report_sent.json',
+            'wait_until_next_update.json'
+        ]
         
-        if not os.path.exists(predictions_file):
-            logger.info("📊 Aucun fichier predictions.json à réinitialiser.")
-            return
+        # Effacer tous les fichiers
+        for file in files_to_clear:
+            if os.path.exists(file):
+                os.remove(file)
+                logger.info(f"🗑️ Supprimé: {file}")
         
-        with open(predictions_file, 'r') as f:
-            content = f.read().strip()
-            if not content:
-                logger.info("📊 Fichier predictions.json vide, rien à réinitialiser.")
-                return
-            predictions = json.loads(content)
-        
-        inter_predictions = {}
-        non_inter_count = 0
-        
-        for game_num, prediction in predictions.items():
-            if prediction.get('is_inter', False):
-                inter_predictions[game_num] = prediction
-            else:
-                non_inter_count += 1
-        
-        with open(predictions_file, 'w') as f:
-            json.dump(inter_predictions, f, indent=4)
-        
-        logger.info(f"🔄 Réinitialisation programmée effectuée à 00h59 (Bénin):")
-        logger.info(f"   - {non_inter_count} prédictions automatiques supprimées")
-        logger.info(f"   - {len(inter_predictions)} prédictions INTER conservées")
-        logger.info(f"   - collected_games.json et inter_data.json NON modifiés")
+        # Recharger le bot predictor pour réinitialiser TOUTES les données
+        if bot.handlers.card_predictor:
+            predictor = bot.handlers.card_predictor
+            
+            # Forcer la réinitialisation complète
+            predictor.predictions = {}
+            predictor.inter_data = []
+            predictor.smart_rules = []
+            predictor.collected_games = set()
+            predictor.sequential_history = {}
+            predictor.pending_edits = {}
+            predictor.quarantined_rules = {}
+            predictor.last_prediction_time = 0
+            predictor.last_predicted_game_number = 0
+            predictor.consecutive_fails = 0
+            predictor.single_trigger_until = 0
+            predictor.last_analysis_time = 0
+            predictor.last_inter_update_time = 0
+            predictor.last_report_sent = {}
+            predictor.wait_until_next_update = 0
+            
+            # ✅ RÉACTIVER le mode INTER automatiquement
+            predictor.is_inter_mode_active = True
+            predictor._save_all_data()
+            
+            logger.info("🔄 RESET COMPLET EFFECTUÉ À 00h59 (BÉNIN):")
+            logger.info("   ✅ TOUT EFFACÉ (prédictions, INTER, smart rules, collecte, etc.)")
+            logger.info("   ✅ CONSERVÉ: IDs canaux (channels_config.json)")
+            logger.info("   ✅ MODE INTER: RÉACTIVÉ automatiquement")
+            logger.info("   ✅ COLLECTE: Réinitialisée à zéro")
+        else:
+            logger.error("❌ card_predictor non initialisé")
         
     except Exception as e:
-        logger.error(f"❌ Erreur lors de la réinitialisation programmée: {e}")
+        logger.error(f"❌ Erreur lors du reset complet: {e}")
+
+def send_startup_message():
+    """Envoie un message de démarrage de session avec la dernière mise à jour INTER."""
+    try:
+        if bot.handlers.card_predictor:
+            predictor = bot.handlers.card_predictor
+            if not predictor.telegram_message_sender or not predictor.prediction_channel_id:
+                return
+            
+            now = predictor.now()
+            last_update = predictor.get_inter_version()
+            session_label = predictor.current_session_label()
+            inter_active = "✅ ACTIF" if predictor.is_inter_mode_active else "❌ INACTIF"
+            
+            msg = (f"🎬 **LES PRÉDICTIONS REPRENNENT !**\n\n"
+                   f"⏰ Heure de Bénin : {now.strftime('%H:%M:%S - %d/%m/%Y')}\n"
+                   f"📅 Session : {session_label}\n"
+                   f"🧠 Mode Intelligent : {inter_active}\n"
+                   f"🔄 Mise à jour des règles : {last_update}\n\n"
+                   f"👨‍💻 **Développeur** : Sossou Kouamé\n"
+                   f"🎟️ **Code Promo** : Koua229")
+            
+            predictor.telegram_message_sender(predictor.prediction_channel_id, msg)
+            logger.info("📢 Message de démarrage de session envoyé")
+    except Exception as e:
+        logger.error(f"❌ Erreur envoi message démarrage: {e}")
+
+def send_session_reports():
+    """Envoie les rapports de session à 5h, 17h, 22h (heure du Bénin)."""
+    try:
+        if bot.handlers.card_predictor:
+            bot.handlers.card_predictor.check_and_send_reports()
+    except Exception as e:
+        logger.error(f"❌ Erreur envoi rapport: {e}")
 
 def setup_scheduler():
-    """Configure le planificateur pour la réinitialisation quotidienne."""
+    """Configure le planificateur pour la réinitialisation quotidienne et les rapports."""
     try:
         scheduler = BackgroundScheduler()
-        
         benin_tz = pytz.timezone('Africa/Porto-Novo')
         
-        trigger = CronTrigger(
-            hour=0,
-            minute=59,
-            timezone=benin_tz
-        )
-        
+        # Réinitialisation quotidienne à 00h59
+        trigger_reset = CronTrigger(hour=0, minute=59, timezone=benin_tz)
         scheduler.add_job(
             reset_non_inter_predictions,
-            trigger=trigger,
+            trigger=trigger_reset,
             id='daily_prediction_reset',
             name='Réinitialisation quotidienne des prédictions automatiques',
             replace_existing=True
         )
         
+        # Message de redémarrage à 1h, 9h, 15h, 21h
+        for hour in [1, 9, 15, 21]:
+            trigger_startup = CronTrigger(hour=hour, minute=0, timezone=benin_tz)
+            scheduler.add_job(
+                send_startup_message,
+                trigger=trigger_startup,
+                id=f'startup_message_{hour}h',
+                name=f'Message redémarrage à {hour}h00',
+                replace_existing=True
+            )
+        
+        # Rapports automatiques à 6h, 12h, 18h, 00h
+        for hour in [6, 12, 18, 0]:
+            trigger_report = CronTrigger(hour=hour, minute=0, timezone=benin_tz)
+            scheduler.add_job(
+                send_session_reports,
+                trigger=trigger_report,
+                id=f'session_report_{hour}h',
+                name=f'Rapport de session à {hour}h00',
+                replace_existing=True
+            )
+        
         scheduler.start()
-        logger.info("⏰ Planificateur configuré: réinitialisation à 00h59 (heure du Bénin)")
+        logger.info("⏰ Planificateur configuré:")
+        logger.info("   - Réinitialisation à 00h59 (heure du Bénin)")
+        logger.info("   - Rapports à 5h00, 17h00, 22h00 (heure du Bénin)")
         
         return scheduler
     except Exception as e:
@@ -174,8 +259,12 @@ setup_webhook()
 scheduler = setup_scheduler()
 
 if __name__ == '__main__':
-    # Get port from environment 
+    # Get port from environment (10000 pour Render.com, 5000 pour Replit)
     port = config.PORT
-
+    
+    # Override pour Render.com si nécessaire
+    if os.getenv('RENDER'):
+        port = int(os.getenv('PORT', 10000))
+    
     # Run the Flask app
     app.run(host='0.0.0.0', port=port, debug=config.DEBUG)

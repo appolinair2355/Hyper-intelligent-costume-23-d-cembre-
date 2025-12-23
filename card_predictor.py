@@ -665,10 +665,10 @@ class CardPredictor:
         predicted_suit = None
         trigger_used = None
         is_inter_prediction = False
+        rule_index = 0  # ✅ INITIALISER pour éviter "unbound" à la ligne 725
 
-        # A. PRIORITÉ 1 : MODE INTER - Utiliser les 2 TOP de CHAQUE costume
+        # A. PRIORITÉ 1 : MODE INTER - Utiliser TOUJOURS les 2 TOP de CHAQUE costume
         if self.is_inter_mode_active and self.smart_rules:
-            use_single_trigger_only = time.time() < self.single_trigger_until
             rule_index = 0  # Initialiser pour éviter "unbound"
             
             rules_by_suit = defaultdict(list)
@@ -676,15 +676,15 @@ class CardPredictor:
                 rules_by_suit[rule['predict']].append(rule)
             
             # Pour CHAQUE costume, vérifier si le déclencheur est dans les 2 top TRIÉS
-            for suit in ['♠️', '♥️', '❤️', '♦️', '♣️']:
+            for suit in ['♠️', '❤️', '♦️', '♣️']:  # ✅ CORRIGÉ: Juste les 4 vrais costumes
                 if suit not in rules_by_suit:
                     continue
                     
-                # Trier par count DESC pour avoir les vrais TOP2
+                # ✅ CORRIGÉ: TOUJOURS trier par count DESC et prendre les 2 premiers
                 suit_rules = sorted(rules_by_suit[suit], key=lambda x: x.get('count', 0), reverse=True)
-                rules_to_check = suit_rules[:1] if use_single_trigger_only else suit_rules[:2]
+                top_2_rules = suit_rules[:2]  # ✅ TOUJOURS utiliser les 2 TOP
                 
-                for rule_idx, rule in enumerate(rules_to_check):
+                for rule_idx, rule in enumerate(top_2_rules):
                     if rule['trigger'] == first_card:
                         key = f"{first_card}_{rule['predict']}"
                         # Vérifier quarantaine avec expiration 1h
@@ -704,8 +704,8 @@ class CardPredictor:
                         rule_index = rule_idx + 1  # TOP1 = 1, TOP2 = 2
                         trigger_used = rule['trigger']
                         is_inter_prediction = True
-                        mode_info = "TOP1" if use_single_trigger_only else "TOP2"
-                        logger.info(f"🔮 INTER ({mode_info}): Déclencheur {first_card} -> Prédit {predicted_suit}")
+                        top_label = "TOP1" if rule_idx == 0 else "TOP2"
+                        logger.info(f"🔮 INTER ({top_label}): Déclencheur {first_card} -> Prédit {predicted_suit}")
                         break
                 
                 if predicted_suit:
@@ -736,7 +736,7 @@ class CardPredictor:
         return text
 
 
-    def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: str = None):
+    def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
         target = game_number_source + 2
         txt = self.prepare_prediction_text(game_number_source, suit)
         
