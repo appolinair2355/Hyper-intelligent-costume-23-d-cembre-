@@ -829,16 +829,13 @@ class CardPredictor:
             # Vérifier séquentiellement : game_number prédit, +1, +2
             verification_found = False
             verification_offset = None
-            
-            for offset in [0, 1, 2]:
+                        for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
                 
                 if game_number == check_game_number:
-                    # Le game_number actuel correspond à predicted_game + offset
                     costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
                     
                     if costume_found:
-                        # Succès : mettre à jour avec le statut approprié
                         status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
                         updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
@@ -846,6 +843,11 @@ class CardPredictor:
                         prediction['verification_count'] = offset
                         prediction['final_message'] = updated_message
                         self.consecutive_fails = 0
+
+                        # 🔒 QUARANTAINE AUSSI POUR ✅2️⃣
+                        if offset == 2 and prediction.get('is_inter'):
+                            self._apply_quarantine(prediction)
+
                         self._save_all_data()
 
                         verification_result = {
@@ -854,14 +856,9 @@ class CardPredictor:
                             'new_message': updated_message,
                             'message_id_to_edit': prediction.get('message_id')
                         }
-                        verification_found = True
-                        break
-            
-            # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
-            if verification_found:
-                break
-            
-            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
+                        return verification_result          # on a fini, on sort
+                        
+            # –––– ÉCHEC : on a dépassé predicted_game + 2 ––––
             if game_number > predicted_game + 2:
                 status_symbol = "❌"
                 updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
@@ -871,38 +868,23 @@ class CardPredictor:
                 
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
-                    self.is_inter_mode_active = False 
+                    self.is_inter_mode_active = False
                     logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
                 else:
                     self.consecutive_fails += 1
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
-                        self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER (TOP1 uniquement pendant 1h).")
-                
+                        self.analyze_and_set_smart_rules(force_activate=True)
+
                 self._save_all_data()
 
-                verification_result = {
+                return {
                     'type': 'edit_message',
                     'predicted_game': str(predicted_game),
                     'new_message': updated_message,
                     'message_id_to_edit': prediction.get('message_id')
                 }
-                break
-                        
-                        # 🔒 QUARANTAINE AUSSI POUR ✅2️⃣ : Si offset=2 ET is_inter, mettre en quarantaine
-                        if offset == 2 and prediction.get('is_inter'):
-                            self._apply_quarantine(prediction)
-                            logger.info(f"🔒 Quarantaine appliquée (✅2️⃣): Prédiction trouvée au +2, déclencheur en quarantaine.")
-                        
-                        self._save_all_data()
 
-                        verification_result = {
-                            'type': 'edit_message',
-                            'predicted_game': str(predicted_game),
-                            'new_message': updated_message,
-                            'message_id_to_edit': prediction.get('message_id')
-                        }
                         verification_found = True
                         break
             
