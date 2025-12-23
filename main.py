@@ -1,5 +1,4 @@
 # main.py
-
 """
 Main entry point for the Telegram bot deployment on render.com
 """
