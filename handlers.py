@@ -273,14 +273,21 @@ class TelegramHandlers:
                 reverse=True
             )[:5]
             
-            message += "📊 Les 5 dernier prediction envoyee\n"
+            message += "📊 Les 5 dernières prédictions envoyées\n"
             if recent_preds:
                 for game_num, pred in recent_preds:
                     trigger = pred.get('predicted_from_trigger', '?')
                     suit = pred.get('predicted_costume', '?')
-                    message += f"Prediction {suit} delanceheur utiliser :{trigger}\n"
+                    status = pred.get('status', 'pending')
+                    is_inter = "🧠 INTER" if pred.get('is_inter') else "📋 STATIQUE"
+                    status_display = {
+                        'pending': '⏳',
+                        'won': '✅',
+                        'lost': '❌'
+                    }.get(status, '?')
+                    message += f"  • Jeu {game_num}: {suit} ({status_display}) - Déclencheur: {trigger} [{is_inter}]\n"
             else:
-                message += "Aucune prediction\n"
+                message += "  Aucune prédiction\n"
             message += "\n"
             
             # Prochain bilan
