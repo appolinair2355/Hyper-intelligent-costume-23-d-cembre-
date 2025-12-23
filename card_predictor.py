@@ -772,25 +772,25 @@ class CardPredictor:
         return self._verify_prediction_common(message, is_edited=True)
 
     def check_costume_in_first_parentheses(self, message: str, predicted_costume: str) -> bool:
-        """Vérifie si le costume prédit est dans la PREMIÈRE carte du PREMIER groupe"""
-        # Récupérer UNIQUEMENT la PREMIÈRE carte du premier groupe
-        first_card_info = self.get_first_card_info(message)
+        """Vérifie si le costume prédit est dans TOUTES les cartes du PREMIER groupe"""
+        # Récupérer TOUTES les cartes du premier groupe
+        all_cards_in_first_group = self.get_all_cards_in_first_group(message)
         
-        if not first_card_info:
-            logger.debug("🎯 Aucune première carte trouvée")
+        if not all_cards_in_first_group:
+            logger.debug("🎯 Aucune carte trouvée dans le premier groupe")
             return False
-        
-        first_card, first_suit = first_card_info
         
         # Normaliser le costume prédit
         normalized_costume = predicted_costume.replace("❤️", "♥️")
         
-        # Vérifier si la PREMIÈRE carte a le costume prédit
-        if first_suit == normalized_costume:
-            logger.info(f"✅ Costume {normalized_costume} trouvé dans PREMIÈRE carte {first_card}")
-            return True
+        # Vérifier si au moins UNE carte du premier groupe a le costume prédit
+        for card in all_cards_in_first_group:
+            card_suit = card[-1]  # Le dernier caractère est l'enseigne
+            if card_suit == normalized_costume:
+                logger.info(f"✅ Costume {normalized_costume} trouvé dans le carte {card} du PREMIER groupe")
+                return True
         
-        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans première carte {first_card} (enseigne: {first_suit})")
+        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans les cartes du premier groupe: {all_cards_in_first_group}")
         return False
 
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
