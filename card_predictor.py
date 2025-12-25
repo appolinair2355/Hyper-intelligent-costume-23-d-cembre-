@@ -30,7 +30,7 @@ STATIC_RULES = {
 }
 
 # Symboles pour les status de vérification
-SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣'}
+SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
 
 # Sessions de prédictions (heure_début, heure_fin)
 # 1h-6h, 9h-12h, 15h-18h, 21h-00h (00h = 24)
@@ -198,8 +198,8 @@ class CardPredictor:
                     session_predictions[game_num] = pred
             
             total = len(session_predictions)
-            wins = sum(1 for p in session_predictions.values() if str(p.get("status", "")).startswith("✅") or p.get("status") == 'won')
-            fails = sum(1 for p in session_predictions.values() if p.get("status") in ["❌", "lost"])
+            wins = sum(1 for p in session_predictions.values() if p.get("status") == 'won')
+            fails = sum(1 for p in session_predictions.values() if p.get("status") == 'lost')
             win_rate = (wins / total * 100) if total else 0
             fail_rate = (fails / total * 100) if total else 0
             
@@ -789,9 +789,9 @@ class CardPredictor:
             return False
         
         # Normaliser le costume prédit
-        normalized_costume = predicted_costume.replace("❤️", "♥️")
+        normalized_predicted = predicted_costume.replace("❤️", "♥️")
         
-        logger.debug(f"🔍 Vérification costume {normalized_costume} dans les cartes: {all_cards_in_first_group}")
+        logger.debug(f"🔍 Vérification costume {normalized_predicted} dans les cartes: {all_cards_in_first_group}")
         
         # Vérifier si au moins UNE carte du premier groupe a le costume prédit
         for card in all_cards_in_first_group:
@@ -802,13 +802,16 @@ class CardPredictor:
                     card_suit = suit
                     break
             
-            logger.debug(f"  Analyse carte: {card}, enseigne extraite: {card_suit}")
+            # Normaliser aussi le costume de la carte pour la comparaison
+            normalized_card_suit = card_suit.replace("❤️", "♥️") if card_suit else None
             
-            if card_suit == normalized_costume:
-                logger.info(f"✅ Costume {normalized_costume} trouvé dans la carte {card} du PREMIER groupe")
+            logger.debug(f"  Analyse carte: {card}, enseigne extraite: {card_suit} → normalisée: {normalized_card_suit}")
+            
+            if normalized_card_suit == normalized_predicted:
+                logger.info(f"✅ Costume {normalized_predicted} trouvé dans la carte {card} du PREMIER groupe")
                 return True
         
-        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans les cartes du premier groupe: {all_cards_in_first_group}")
+        logger.debug(f"❌ Costume {normalized_predicted} non trouvé dans les cartes du premier groupe: {all_cards_in_first_group}")
         return False
 
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
