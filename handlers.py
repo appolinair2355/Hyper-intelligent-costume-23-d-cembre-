@@ -123,10 +123,10 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            self.send_message(chat_id, "📦 **Envoi du package gg.zip pour déploiement...**")
+            self.send_message(chat_id, "📦 **Envoi du package koopp.zip pour déploiement...**")
             
             # Fichier zip pré-généré
-            zip_filename = 'gg.zip'
+            zip_filename = 'koopp.zip'
             
             import os
             
@@ -144,14 +144,14 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **kokk.zip - Package Complet Bot ENSEIGNE v5.1**\n\n✅ Fichier: kokk.zip (26 Ko)\n✅ Port : 10000 (Render)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Quarantaine intelligente: ❌ ET ✅2️⃣\n✅ Vérification: PREMIÈRE carte uniquement\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire kokk.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
+                    'caption': f'📦 **koopp.zip - Package Complet Bot ENSEIGNE v5.3**\n\n✅ Fichier: koopp.zip\n✅ Port : 10000 (Render.com)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Statuts: ✅0️⃣ (N), ✅1️⃣ (N+1), ✅2️⃣ (N+2), ❌ (pas trouvé)\n✅ Vérification: PREMIÈRE carte uniquement\n✅ Logique corrigée et testée\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire koopp.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
             
             if response.json().get('ok'):
-                logger.info(f"✅ gg.zip envoyé avec succès")
-                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 v5.1 FINAL - Bot hyper intelligent prêt pour production 🚀")
+                logger.info(f"✅ koopp.zip envoyé avec succès")
+                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 v5.3 FINAL - Bot corrigé et prêt pour production 🚀")
             else:
                 self.send_message(chat_id, f"❌ Erreur : {response.text}")
                     

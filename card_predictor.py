@@ -854,74 +854,77 @@ class CardPredictor:
         for predicted_game in sorted(self.predictions.keys()):
             prediction = self.predictions[predicted_game]
 
-            if prediction.get('status') != 'pending': continue
+            if prediction.get('status') != 'pending': 
+                continue
 
             predicted_costume = prediction.get('predicted_costume')
-            if not predicted_costume: continue
+            if not predicted_costume: 
+                continue
 
             # Vérifier séquentiellement : game_number prédit, +1, +2
             found = False
+            status_symbol = None
+            match_offset = None
             
+            # Vérifier les 3 offsets (0, 1, 2)
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
                 
                 if game_number == check_game_number:
-                    # Le game_number actuel correspond à predicted_game + offset
+                    match_offset = offset
                     costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
                     
                     if costume_found:
-                        # ✅ SUCCÈS : mettre à jour avec le statut approprié
+                        # ✅ SUCCÈS : costume trouvé au bon offset
                         status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
-                        updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-
                         logger.info(f"✅ SUCCÈS: Jeu {predicted_game} trouvé à +{offset} avec statut {status_symbol}")
                         prediction['status'] = 'won'
                         prediction['verification_count'] = offset
-                        prediction['final_message'] = updated_message
-                        self.consecutive_fails = 0
-                        
-                        # 🔒 QUARANTAINE TOUJOURS si is_inter
-                        if prediction.get('is_inter'):
-                            self._apply_quarantine(prediction)
-                            logger.info(f"🔒 Quarantaine appliquée: Prédiction trouvée au +{offset}, déclencheur en quarantaine.")
-                        
-                        self._save_all_data()
-
-                        verification_result = {
-                            'type': 'edit_message',
-                            'predicted_game': str(predicted_game),
-                            'new_message': updated_message,
-                            'message_id_to_edit': prediction.get('message_id')
-                        }
                         found = True
                         break
                     else:
-                        # Pas trouvé à ce offset, continue
+                        # ❌ COSTUME NON TROUVÉ
+                        if offset == 2:
+                            # Dernier offset sans succès = ÉCHEC TOTAL
+                            status_symbol = "❌"
+                            logger.info(f"❌ ÉCHEC: Costume {predicted_costume} non trouvé au jeu {predicted_game}+2")
+                            prediction['status'] = 'lost'
+                            found = True
+                            break
+                        # Sinon on continue boucle pour essayer les prochains offsets
                         continue
             
-            # Si prédiction résolue, on sort
-            if found:
-                break
-            
-            # ❌ ÉCHEC : Vérifier si on a passé l'offset 2 (donc c'est un échec)
-            if game_number > predicted_game + 2:
+            # Si on a trouvé une correspondance de jeu mais on dépasse N+2, c'est un échec
+            if game_number > predicted_game + 2 and prediction.get('status') == 'pending':
                 status_symbol = "❌"
-                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-
+                logger.info(f"❌ ÉCHEC: Jeu {game_number} dépasse {predicted_game}+2")
                 prediction['status'] = 'lost'
+                found = True
+            
+            # Mettre à jour le message si prédiction résolue
+            if found and status_symbol:
+                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
                 prediction['final_message'] = updated_message
                 
                 # 🔒 QUARANTAINE TOUJOURS si is_inter
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
-                    self.is_inter_mode_active = False 
-                    logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                else:
+                    if prediction['status'] == 'lost':
+                        self.is_inter_mode_active = False 
+                        logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
+                    else:
+                        logger.info(f"🔒 Quarantaine appliquée (succès): Déclencheur en quarantaine.")
+                
+                # Gérer les échecs statiques
+                if prediction['status'] == 'lost' and not prediction.get('is_inter'):
                     self.consecutive_fails += 1
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
                         self.analyze_and_set_smart_rules(force_activate=True) 
                         logger.info("⚠️ 2 Échecs Statiques : Activation INTER.")
+                else:
+                    if prediction['status'] == 'won':
+                        self.consecutive_fails = 0
                 
                 self._save_all_data()
 
