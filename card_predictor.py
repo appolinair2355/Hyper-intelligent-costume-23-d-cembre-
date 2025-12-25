@@ -11,14 +11,12 @@ from collections import defaultdict
 import pytz
 
 logger = logging.getLogger(__name__)
-# Mis à jour à DEBUG pour vous aider à tracer la collecte.
 logger.setLevel(logging.DEBUG) 
 
 # ================== CONFIG ==================
 BENIN_TZ = pytz.timezone("Africa/Porto-Novo")
 
 # --- 1. RÈGLES STATIQUES (13 Règles Exactes) ---
-# Si la 1ère carte du jeu N est la clé -> On prédit la valeur pour N+2
 STATIC_RULES = {
     "10♦️": "♠️", "10♠️": "❤️", 
     "9♣️": "❤️", "9♦️": "♠️",
@@ -32,8 +30,7 @@ STATIC_RULES = {
 # Symboles pour les status de vérification
 SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
 
-# Sessions de prédictions (heure_début, heure_fin)
-# 1h-6h, 9h-12h, 15h-18h, 21h-00h (00h = 24)
+# Sessions de prédictions
 PREDICTION_SESSIONS = [
     (1, 6),
     (9, 12),
@@ -755,8 +752,6 @@ class CardPredictor:
         logger.info(f"📝 Prédiction formatée: Jeu {game_number_source} → {target_game}, Costume: {predicted_costume} (Déclencheur: {self._last_trigger_used})")
         return text
 
-
-
     # --- VERIFICATION LOGIQUE ---
 
     def verify_prediction(self, message: str) -> Optional[Dict]:
@@ -859,55 +854,6 @@ class CardPredictor:
                 prediction['status'] = 'lost'
                 prediction['final_message'] = updated_message
                 
-                if prediction.get('is_inter'):
-                    self._apply_quarantine(prediction)
-                    self.is_inter_mode_active = False 
-                    logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                else:
-                    self.consecutive_fails += 1
-                    if self.consecutive_fails >= 2:
-                        self.single_trigger_until = time.time() + 3600
-                        self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER (TOP1 uniquement pendant 1h).")
-                
-                self._save_all_data()
-
-                verification_result = {
-                    'type': 'edit_message',
-                    'predicted_game': str(predicted_game),
-                    'new_message': updated_message,
-                    'message_id_to_edit': prediction.get('message_id')
-                }
-                break
-
-        return verification_result    
-        def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
-        target = game_number_source + 2
-        txt = self.prepare_prediction_text(game_number_source, suit)
-        
-        # Obtenir le déclencheur utilisé (priorité au paramètre, puis au stockage, puis par défaut '?')
-        if not trigger_used:
-            trigger_used = self._last_trigger_used or '?'
-        
-        self.predictions[target] = {
-            'predicted_costume': suit, 
-            'status': 'pending', 
-            'predicted_from': game_number_source, 
-            'predicted_from_trigger': trigger_used,
-            'message_text': txt, 
-            'message_id': message_id_bot, 
-            'is_inter': is_inter,
-            'rule_index': self._last_rule_index,
-            'timestamp': time.time()
-        }
-        
-        self.last_prediction_time = time.time()
-        self.last_predicted_game_number = game_number_source
-        self.consecutive_fails = 0
-        self._save_all_data()
-
-
-                
                 # 🔒 QUARANTAINE TOUJOURS si is_inter
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
@@ -939,6 +885,31 @@ class CardPredictor:
                 break
 
         return verification_result
+
+    def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
+        target = game_number_source + 2
+        txt = self.prepare_prediction_text(game_number_source, suit)
+        
+        # Obtenir le déclencheur utilisé (priorité au paramètre, puis au stockage, puis par défaut '?')
+        if not trigger_used:
+            trigger_used = self._last_trigger_used or '?'
+        
+        self.predictions[target] = {
+            'predicted_costume': suit, 
+            'status': 'pending', 
+            'predicted_from': game_number_source, 
+            'predicted_from_trigger': trigger_used,
+            'message_text': txt, 
+            'message_id': message_id_bot, 
+            'is_inter': is_inter,
+            'rule_index': self._last_rule_index,
+            'timestamp': time.time()
+        }
+        
+        self.last_prediction_time = time.time()
+        self.last_predicted_game_number = game_number_source
+        self.consecutive_fails = 0
+        self._save_all_data()
 
     def reset_automatic_predictions(self) -> Dict[str, int]:
         """
