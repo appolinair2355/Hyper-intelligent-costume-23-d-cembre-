@@ -3,3 +3,8 @@ gunicorn==23.0.0
 requests==2.32.4
 APScheduler>=3.10.0
 pytz>=2024.1
+APScheduler
+Flask
+gunicorn
+pytz
+requests

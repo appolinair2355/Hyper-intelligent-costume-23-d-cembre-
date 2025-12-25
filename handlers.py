@@ -144,7 +144,7 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **gg.zip - Package Complet Bot ENSEIGNE v5.1**\n\n✅ Fichier: gg.zip (26 Ko)\n✅ Port : 5000 (Replit) / 10000 (Render)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Quarantaine intelligente: ❌ ET ✅2️⃣\n✅ Vérification: PREMIÈRE carte uniquement\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire gg.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
+                    'caption': f'📦 **kokk.zip - Package Complet Bot ENSEIGNE v5.1**\n\n✅ Fichier: kokk.zip (26 Ko)\n✅ Port : 10000 (Render)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Quarantaine intelligente: ❌ ET ✅2️⃣\n✅ Vérification: PREMIÈRE carte uniquement\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire kokk.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
