@@ -174,8 +174,9 @@ class CardPredictor:
     
     # ======== RAPPORTS ========
     def check_and_send_reports(self):
-        """Envoie les rapports de fin de session (appelé par le scheduler)."""
+        """Envoie les rapports de fin de session (appelé régulièrement)."""
         if not self.telegram_message_sender or not self.prediction_channel_id:
+            logger.debug("⚠️ Pas de sender ou prediction_channel_id")
             return
         
         now = self.now()
@@ -184,43 +185,54 @@ class CardPredictor:
         # Heures de fin de session : 6h, 12h, 18h, 00h (minuit)
         report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
         
-        if now.hour in report_hours:
-            key = f"{key_date}_{now.hour}"
-            if self.last_report_sent.get(key):
-                return
-            
-            start, end = report_hours[now.hour]
-            
-            # Compter UNIQUEMENT les prédictions de cette session
-            session_predictions = {}
-            for game_num, pred in self.predictions.items():
-                if pred.get('status') in ['won', 'lost', 'pending']:
-                    session_predictions[game_num] = pred
-            
-            total = len(session_predictions)
-            wins = sum(1 for p in session_predictions.values() if p.get("status") == 'won')
-            fails = sum(1 for p in session_predictions.values() if p.get("status") == 'lost')
-            win_rate = (wins / total * 100) if total else 0
-            fail_rate = (fails / total * 100) if total else 0
-            
-            msg = (f"🎬 **BILAN DE SESSION**\n\n"
-                   f"⏰ Heure de Bénin : {now.strftime('%H:%M:%S - %d/%m/%Y')}\n"
-                   f"📅 Session fin de session : {start} – {end}\n"
-                   f"🧠 Mode Intelligent : {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}\n"
-                   f"🔄 Mise à jour des règles : {self.get_inter_version()}\n\n"
-                   f"📊 **RÉSULTATS**\n"
-                   f"📈 Total prédictions : {total}\n"
-                   f"✅ Réussites : {wins} ({win_rate:.1f}%)\n"
-                   f"❌ Échecs : {fails} ({fail_rate:.1f}%)\n\n"
-                   f"💖 Merci à tous les inscrits sur le code promo !\n"
-                   f"Votre soutien nous aide à améliorer continuellement le bot.\n\n"
-                   f"👨‍💻 **Développeur** : Sossou Kouamé\n"
-                   f"🎟️ **Code Promo** : Koua229")
-            
+        # Vérifier si c'est une heure de rapport
+        if now.hour not in report_hours:
+            return
+        
+        key = f"{key_date}_{now.hour}"
+        
+        # Éviter d'envoyer deux fois
+        if self.last_report_sent.get(key):
+            return
+        
+        logger.info(f"📊 Envoi rapport de session à {now.hour}h...")
+        
+        start, end = report_hours[now.hour]
+        
+        # Compter les prédictions complétées (won ou lost)
+        session_predictions = {}
+        for game_num, pred in self.predictions.items():
+            status = pred.get('status')
+            if status in ['won', 'lost']:
+                session_predictions[game_num] = pred
+        
+        total = len(session_predictions)
+        wins = sum(1 for p in session_predictions.values() if p.get("status") == 'won')
+        fails = sum(1 for p in session_predictions.values() if p.get("status") == 'lost')
+        win_rate = (wins / total * 100) if total > 0 else 0
+        fail_rate = (fails / total * 100) if total > 0 else 0
+        
+        # Construire le message
+        msg = (f"🎬 **BILAN DE SESSION**\n\n"
+               f"⏰ Heure de Bénin : {now.strftime('%H:%M:%S - %d/%m/%Y')}\n"
+               f"📅 Session : {start} – {end}\n"
+               f"🧠 Mode : {'✅ INTER ACTIF' if self.is_inter_mode_active else '❌ STATIQUE'}\n"
+               f"🔄 Règles : {self.get_inter_version()}\n\n"
+               f"📊 **RÉSULTATS**\n"
+               f"📈 Total : {total}\n"
+               f"✅ Succès : {wins} ({win_rate:.1f}%)\n"
+               f"❌ Échecs : {fails} ({fail_rate:.1f}%)\n\n"
+               f"💖 Merci à tous sur le code promo !\n\n"
+               f"👨‍💻 Dev : Sossou Kouamé\n"
+               f"🎟️ Code : Koua229")
+        
+        try:
             self.telegram_message_sender(self.prediction_channel_id, msg)
             self.last_report_sent[key] = True
             self._save_all_data()
-            logger.info(f"📊 Rapport de session {start}-{end} envoyé")
+            logger.info(f"✅ Rapport {start}-{end} envoyé: {total} prédictions, {wins} succès")
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi rapport: {e}")
     
     def get_inter_version(self):
         if not self.last_inter_update_time:
@@ -848,8 +860,7 @@ class CardPredictor:
             if not predicted_costume: continue
 
             # Vérifier séquentiellement : game_number prédit, +1, +2
-            verification_found = False
-            verification_offset = None
+            found = False
             
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
@@ -859,7 +870,7 @@ class CardPredictor:
                     costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
                     
                     if costume_found:
-                        # Succès : mettre à jour avec le statut approprié
+                        # ✅ SUCCÈS : mettre à jour avec le statut approprié
                         status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
                         updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
@@ -869,10 +880,10 @@ class CardPredictor:
                         prediction['final_message'] = updated_message
                         self.consecutive_fails = 0
                         
-                        # 🔒 QUARANTAINE AUSSI POUR ✅2️⃣ : Si offset=2 ET is_inter, mettre en quarantaine
-                        if offset == 2 and prediction.get('is_inter'):
+                        # 🔒 QUARANTAINE TOUJOURS si is_inter
+                        if prediction.get('is_inter'):
                             self._apply_quarantine(prediction)
-                            logger.info(f"🔒 Quarantaine appliquée (✅2️⃣): Prédiction trouvée au +2, déclencheur en quarantaine.")
+                            logger.info(f"🔒 Quarantaine appliquée: Prédiction trouvée au +{offset}, déclencheur en quarantaine.")
                         
                         self._save_all_data()
 
@@ -882,14 +893,17 @@ class CardPredictor:
                             'new_message': updated_message,
                             'message_id_to_edit': prediction.get('message_id')
                         }
-                        verification_found = True
+                        found = True
                         break
+                    else:
+                        # Pas trouvé à ce offset, continue
+                        continue
             
-            # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
-            if verification_found:
+            # Si prédiction résolue, on sort
+            if found:
                 break
             
-            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
+            # ❌ ÉCHEC : Vérifier si on a passé l'offset 2 (donc c'est un échec)
             if game_number > predicted_game + 2:
                 status_symbol = "❌"
                 updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
@@ -897,6 +911,7 @@ class CardPredictor:
                 prediction['status'] = 'lost'
                 prediction['final_message'] = updated_message
                 
+                # 🔒 QUARANTAINE TOUJOURS si is_inter
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
                     self.is_inter_mode_active = False 
@@ -906,7 +921,7 @@ class CardPredictor:
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
                         self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER (TOP1 uniquement pendant 1h).")
+                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER.")
                 
                 self._save_all_data()
 
