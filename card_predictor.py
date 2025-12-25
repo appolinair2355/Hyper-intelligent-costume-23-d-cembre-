@@ -621,7 +621,7 @@ class CardPredictor:
             return True
         return False
 
-        def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
+            def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
         self.check_and_send_reports()
         self.check_and_update_rules()
 
@@ -706,8 +706,6 @@ class CardPredictor:
             return True, game_number, predicted_suit, is_inter_prediction
 
         return False, None, None, None
-            
-
         
         # VÉRIFICATION CRITIQUE : Ne pas faire deux prédictions si une est en cours de vérification
         if any(p.get('status') == 'pending' for p in self.predictions.values()):
