@@ -621,91 +621,92 @@ class CardPredictor:
             return True
         return False
 
-    def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
-    self.check_and_send_reports()
-    self.check_and_update_rules()
+        def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
+        self.check_and_send_reports()
+        self.check_and_update_rules()
 
-    if not self.is_in_session():
-        logger.debug(f"⚠️ Hors session. Heure Benin: {self.now().hour}h")
-        return False, None, None, None
+        if not self.is_in_session():
+            logger.debug(f"⚠️ Hors session. Heure Benin: {self.now().hour}h")
+            return False, None, None, None
 
-    if any(p.get('status') == 'pending' for p in self.predictions.values()):
-        logger.debug("⚠️ Une prédiction est en attente. Nouvelle prédiction annulée.")
-        return False, None, None, None
+        if any(p.get('status') == 'pending' for p in self.predictions.values()):
+            logger.debug("⚠️ Une prédiction est en attente. Nouvelle prédiction annulée.")
+            return False, None, None, None
 
-    if time.time() < self.wait_until_next_update:
-        logger.debug("⏸️ Cooldown après échec/quarantaine actif")
-        return False, None, None, None
+        if time.time() < self.wait_until_next_update:
+            logger.debug("⏸️ Cooldown après échec/quarantaine actif")
+            return False, None, None, None
 
-    game_number = self.extract_game_number(message)
-    if not game_number:
-        logger.debug("❌ Aucun numéro de jeu trouvé")
-        return False, None, None, None
+        game_number = self.extract_game_number(message)
+        if not game_number:
+            logger.debug("❌ Aucun numéro de jeu trouvé")
+            return False, None, None, None
 
-    if game_number in self.predictions and self.predictions[game_number].get('status') == 'pending':
-        logger.debug(f"⚠️ Jeu {game_number} déjà prédit, en attente.")
-        return False, None, None, None
+        if game_number in self.predictions and self.predictions[game_number].get('status') == 'pending':
+            logger.debug(f"⚠️ Jeu {game_number} déjà prédit, en attente.")
+            return False, None, None, None
 
-    if self.last_predicted_game_number and (game_number - self.last_predicted_game_number < 3):
-        logger.debug(f"⏳ Écart insuffisant: {game_number - self.last_predicted_game_number} < 3")
-        return False, None, None, None
+        if self.last_predicted_game_number and (game_number - self.last_predicted_game_number < 3):
+            logger.debug(f"⏳ Écart insuffisant: {game_number - self.last_predicted_game_number} < 3")
+            return False, None, None, None
 
-    # 🔍 NOUVEAU : toutes les cartes du 1er groupe
-    cards = self.get_first_group_cards(message)
-    if not cards:
-        logger.debug("❌ Aucune carte dans le 1er groupe")
-        return False, None, None, None
+        # 🔍 NOUVEAU : toutes les cartes du 1er groupe
+        cards = self.get_first_group_cards(message)
+        if not cards:
+            logger.debug("❌ Aucune carte dans le 1er groupe")
+            return False, None, None, None
 
-    logger.info(f"🎮 Jeu source: {game_number} → Prédiction pour: {game_number + 2} | Cartes 1er groupe: {cards}")
+        logger.info(f"🎮 Jeu source: {game_number} → Prédiction pour: {game_number + 2} | Cartes 1er groupe: {cards}")
 
-    predicted_suit = None
-    trigger_used = None
-    is_inter_prediction = False
-    rule_index = 0
+        predicted_suit = None
+        trigger_used = None
+        is_inter_prediction = False
+        rule_index = 0
 
-    # --- MODE INTER : TOP3 par costume ---
-    if self.is_inter_mode_active and self.smart_rules:
-        rules_by_suit = defaultdict(list)
-        for rule in self.smart_rules:
-            rules_by_suit[rule['predict']].append(rule)
+        # --- MODE INTER : TOP3 par costume ---
+        if self.is_inter_mode_active and self.smart_rules:
+            rules_by_suit = defaultdict(list)
+            for rule in self.smart_rules:
+                rules_by_suit[rule['predict']].append(rule)
 
-        for suit in ['♠️', '❤️', '♦️', '♣️']:
-            suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
-            top3 = suit_rules[:3]  # <-- TOP3
+            for suit in ['♠️', '❤️', '♦️', '♣️']:
+                suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
+                top3 = suit_rules[:3]  # <-- TOP3
 
-            for idx, rule in enumerate(top3):
-                if rule['trigger'] in cards:
-                    key = f"{rule['trigger']}_{rule['predict']}"
-                    if key in self.quarantined_rules:
-                        qua_data = self.quarantined_rules[key]
-                        if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
-                            continue
-                        elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
-                            continue
+                for idx, rule in enumerate(top3):
+                    if rule['trigger'] in cards:
+                        key = f"{rule['trigger']}_{rule['predict']}"
+                        if key in self.quarantined_rules:
+                            qua_data = self.quarantined_rules[key]
+                            if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
+                                continue
+                            elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
+                                continue
 
-                    predicted_suit = rule['predict']
-                    trigger_used = rule['trigger']
-                    is_inter_prediction = True
-                    rule_index = idx + 1  # 1, 2 ou 3
-                    logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit}")
+                        predicted_suit = rule['predict']
+                        trigger_used = rule['trigger']
+                        is_inter_prediction = True
+                        rule_index = idx + 1  # 1, 2 ou 3
+                        logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit}")
+                        break
+                if predicted_suit:
                     break
-            if predicted_suit:
-                break
 
-        if not predicted_suit:
-            logger.debug("⚠️ Aucune règle INTER ne match les cartes du 1er groupe → pas de prédiction")
-            return False, None, None, None
+            if not predicted_suit:
+                logger.debug("⚠️ Aucune règle INTER ne match les cartes du 1er groupe → pas de prédiction")
+                return False, None, None, None
 
-    # --- Pas de statique si INTER actif ---
-    if predicted_suit:
-        if self.last_prediction_time and time.time() < self.last_prediction_time + self.prediction_cooldown:
-            return False, None, None, None
+        # --- Pas de statique si INTER actif ---
+        if predicted_suit:
+            if self.last_prediction_time and time.time() < self.last_prediction_time + self.prediction_cooldown:
+                return False, None, None, None
 
-        self._last_rule_index = rule_index
-        self._last_trigger_used = trigger_used
-        return True, game_number, predicted_suit, is_inter_prediction
+            self._last_rule_index = rule_index
+            self._last_trigger_used = trigger_used
+            return True, game_number, predicted_suit, is_inter_prediction
 
-    return False, None, None, None
+        return False, None, None, None
+            
 
         
         # VÉRIFICATION CRITIQUE : Ne pas faire deux prédictions si une est en cours de vérification
