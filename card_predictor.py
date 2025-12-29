@@ -84,12 +84,15 @@ class CardPredictor:
         self.is_inter_mode_active = self._load_data('inter_mode_status.json', is_scalar=True)
         self.smart_rules = self._load_data('smart_rules.json')
         self.last_analysis_time = self._load_data('last_analysis_time.json', is_scalar=True) or 0
-        self.collected_games = self._load_data('collected_games.json', is_set=True)
+        self.collected_games = self._load_data('collected_games.json', set=True)
         
         self.single_trigger_until = self._load_data('single_trigger_until.json', is_scalar=True) or 0
         
         # Nouvelles données: quarantaine intelligente et rapports
-        self.quarantined_rules = self._load_data('quarantined_rules.json')
+        # CORRECTION CRITIQUE : Assurer que quarantined_rules est toujours un dict
+        quarantined_data = self._load_data('quarantined_rules.json')
+        self.quarantined_rules = quarantined_data if isinstance(quarantined_data, dict) else {}
+        
         self.wait_until_next_update = self._load_data('wait_until_next_update.json', is_scalar=True) or 0
         self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
         self.last_report_sent = self._load_data('last_report_sent.json')
@@ -508,7 +511,7 @@ class CardPredictor:
                     (r for r in self.smart_rules if r.get("trigger") == trigger and r.get("predict") == suit),
                     None
                 )
-                if not rule or rule.get("count", 0) > self.quarantined_rules[key]:
+                if not rule or rule.get("count", 0) > quarantined_data[key]:
                     del self.quarantined_rules[key]
                     logger.info(f"🔓 Quarantaine levée : {key}")
             except Exception as e:
@@ -879,7 +882,7 @@ class CardPredictor:
                 logger.info(f"✅ Costume {normalized_costume} trouvé dans carte {card}")
                 return True
         
-        logger.debug(f"❌ Costume {normalized_costume} non trouvé dans {', '.join(all_cards)}")
+        logger.debug(f"❌ Costume {normalized_costume} non trouvée dans {', '.join(all_cards)}")
         return False
 
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
