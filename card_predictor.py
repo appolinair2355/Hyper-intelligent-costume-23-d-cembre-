@@ -901,11 +901,7 @@ class CardPredictor:
                             logger.info(f"❌ Échec offset {offset} pour jeu {predicted_game}")
                             break
             
-            # ✅ CORRECTION : Ces lignes doivent être à l'INTÉRIEUR de la boucle for predicted_game
-            # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
-            if verification_found:
-                break
-            
+                
             # ✅ Vérifier si on a dépassé le délai (game_number > predicted_game + 2)
             if game_number > predicted_game + 2:
                 logger.warning(f"⏰ Délai dépassé pour jeu {predicted_game}. Message reçu pour {game_number} > {predicted_game + 2}")
@@ -954,9 +950,15 @@ class CardPredictor:
                     'new_message': updated_message,
                     'message_id_to_edit': prediction.get('message_id')
                 }
+                verification_found = True
                 break
-    
-    return verification_result
+            
+            # Si la vérification est résolue, on sort de la boucle
+            if verification_found:
+                break
+        
+        return verification_result
+
 
     def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
         target = game_number_source + 2

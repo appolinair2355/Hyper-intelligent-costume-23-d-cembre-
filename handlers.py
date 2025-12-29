@@ -123,20 +123,22 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            # On utilise yoi.zip comme fichier de déploiement principal
-            zip_filename = 'yoi.zip'
+            # On utilise pack.zip comme fichier de déploiement principal
+            zip_filename = 'pack.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                # Fallback sur les anciens noms si yoi n'est pas encore prêt (sécurité)
-                if os.path.exists('appo.zip'):
-                    zip_filename = 'appo.zip'
+                # Fallback sur les anciens noms pour compatibilité
+                for fallback in ['yoi.zip', 'appo.zip']:
+                    if os.path.exists(fallback):
+                        zip_filename = fallback
+                        break
                 else:
-                    self.send_message(chat_id, "❌ Fichier de déploiement (yoi.zip) non trouvé!")
+                    self.send_message(chat_id, "❌ Fichier de déploiement (pack.zip) non trouvé!")
                     return
 
-            self.send_message(chat_id, f"📦 **Envoi du nouveau package {zip_filename} corrigé...**")
+            self.send_message(chat_id, f"📦 **Envoi du nouveau package pack.zip corrigé...**")
             
             # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
@@ -148,14 +150,14 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **{zip_filename} - Nouveau Package Corrigé**\n\n✅ Fichier: {zip_filename}\n✅ Bilan Auto: Fixé (00h, 06h, 12h, 18h)\n✅ Relance ❌: Fixée (Jeu N+1)\n✅ Vérification: Optimisée\n✅ Port : 10000 (Render.com)\n\n🎯 **Version Finale du 29/12/2025**\n\n👨‍💻 Développeur: Sossou Kouamé',
+                    'caption': f'📦 **pack.zip - Nouveau Package Corrigé**\n\n✅ Fichier: pack.zip\n✅ Bilan Auto: Fixé (6h, 12h, 18h, 0h)\n✅ Relance ❌: Fixée (Jeu N+1 avec même costume)\n✅ Vérification: Optimisée\n✅ Port : 10000 (Render.com)\n✅ Délai dépassé: Détecté (N+2)\n\n🎯 **Version du 29/12/2025 - Corrections Finales**\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
             
             if response.json().get('ok'):
                 logger.info(f"✅ {zip_filename} envoyé avec succès")
-                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 Le bot est maintenant à jour avec les dernières corrections.")
+                self.send_message(chat_id, f"✅ **pack.zip envoyé avec succès!**\n\n🎯 Le bot est maintenant à jour avec les dernières corrections:\n• Relance ❌ avec même costume\n• Vérification du délai N+2\n• Rapports auto à 6h, 12h, 18h, 0h")
             else:
                 self.send_message(chat_id, f"❌ Erreur : {response.text}")
                     
