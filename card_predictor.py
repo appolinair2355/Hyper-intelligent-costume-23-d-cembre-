@@ -614,6 +614,102 @@ class CardPredictor:
         self.wait_until_next_update = time.time() + 1800
         self._save_all_data()
 
+    # NOUVELLE MÉTHODE : Lancement automatique après échec
+    def _attempt_automatic_prediction(self, source_game: int) -> Optional[Dict]:
+        """
+        Essaie de lancer une prédiction automatique pour source_game + 2
+        en utilisant les données collectées de source_game
+        """
+        try:
+            target_game = source_game + 2
+            
+            logger.info(f"🔄 Tentative prédiction automatique: source={source_game}, target={target_game}")
+            
+            # Vérifications de base
+            if not self.is_in_session():
+                logger.debug("⏸️ Hors session")
+                return None
+            
+            if time.time() < self.last_prediction_time + self.prediction_cooldown:
+                logger.debug("⏸️ Cooldown actif")
+                return None
+            
+            if time.time() < self.wait_until_next_update:
+                logger.debug("⏸️ Quarantaine globale")
+                return None
+            
+            # Vérifier si on a les données source
+            source_data = self.sequential_history.get(source_game)
+            if not source_data:
+                logger.debug(f"❓ Données source manquantes pour {source_game}")
+                return None
+            
+            trigger_card = source_data['carte']
+            logger.debug(f"🎯 Déclencheur: {trigger_card}")
+            
+            # Déterminer le costume
+            predicted_suit = None
+            is_inter = False
+            rule_index = 0
+            
+            # MODE INTER
+            if self.is_inter_mode_active and self.smart_rules:
+                rules_by_suit = defaultdict(list)
+                for rule in self.smart_rules:
+                    rules_by_suit[rule['predict']].append(rule)
+                
+                for suit in ['♠️', '❤️', '♦️', '♣️']:
+                    suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
+                    top3 = suit_rules[:3]
+                    
+                    for idx, rule in enumerate(top3):
+                        if rule['trigger'] == trigger_card:
+                            key = f"{rule['trigger']}_{rule['predict']}"
+                            if key in self.quarantined_rules:
+                                qua_data = self.quarantined_rules[key]
+                                if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
+                                    logger.debug(f"🔒 Quarantaine: {key}")
+                                    continue
+                            
+                            predicted_suit = rule['predict']
+                            is_inter = True
+                            rule_index = idx + 1
+                            logger.debug(f"✅ Règle INTER: {trigger_card} → {predicted_suit} (TOP{rule_index})")
+                            break
+                    
+                    if predicted_suit:
+                        break
+            
+            # MODE STATIQUE
+            elif not self.is_inter_mode_active:
+                if trigger_card in STATIC_RULES:
+                    predicted_suit = STATIC_RULES[trigger_card]
+                    logger.debug(f"✅ Règle STATIQUE: {trigger_card} → {predicted_suit}")
+            
+            if not predicted_suit:
+                logger.debug(f"❌ Aucune règle pour {trigger_card}")
+                return None
+            
+            # Préparer les informations
+            self._last_rule_index = rule_index
+            self._last_trigger_used = trigger_used = trigger_card
+            
+            prediction_text = self.prepare_prediction_text(source_game, predicted_suit)
+            
+            logger.info(f"🚀 Prédiction auto prête: {source_game} → {target_game}, costume={predicted_suit}")
+            
+            return {
+                'source_game': source_game,
+                'target_game': target_game,
+                'predicted_costume': predicted_suit,
+                'is_inter': is_inter,
+                'trigger_used': trigger_used,
+                'text': prediction_text
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur: {e}")
+            return None
 
     # --- CŒUR DU SYSTÈME : PRÉDICTION ---
     
@@ -814,7 +910,6 @@ class CardPredictor:
             # Vérifier séquentiellement : game_number prédit, +1, +2
             verification_found = False
             verification_offset = None
-            costume_found_at_any_offset = False
             
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
@@ -841,67 +936,31 @@ class CardPredictor:
                             'message_id_to_edit': prediction.get('message_id')
                         }
                         verification_found = True
-                        costume_found_at_any_offset = True
                         break
-                    elif offset == 2:
-                        # Dernier offset (2) et costume pas trouvé = ÉCHEC IMMÉDIAT
-                        verification_found = True
             
             # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
             if verification_found:
                 break
             
-            # Vérifier si c'est un échec : on a atteint offset 2 SANS trouver le costume, ou on a passé offset 2
-            if (game_number == predicted_game + 2 and not costume_found_at_any_offset) or game_number > predicted_game + 2:
+            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
+            if game_number > predicted_game + 2:
+                logger.info(f"❌ ÉCHEC CONFIRMÉ: prédiction {predicted_game}, jeu actuel {game_number}")
                 status_symbol = "❌"
                 updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
                 prediction['status'] = 'lost'
                 prediction['final_message'] = updated_message
                 
-                # 🔒 QUARANTAINE TOUJOURS si is_inter
+                # 🔒 QUARANTAINE si INTER
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
                     if prediction['status'] == 'lost':
                         self.is_inter_mode_active = False 
                         logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                    else:
-                        logger.info(f"🔒 Quarantaine appliquée (succès): Déclencheur en quarantaine.")
                 
                 # Gérer les échecs statiques
                 if prediction['status'] == 'lost' and not prediction.get('is_inter'):
                     self.consecutive_fails += 1
-                    
-                    # --- NOUVELLE LOGIQUE : MISE AUTOMATIQUE SUR JEU SUIVANT ---
-                    # Si une prédiction (N, N+1, N+2) obtient le statut ❌, on mise automatiquement sur le jeu suivant.
-                    # Exemple : 🔵1300🔵 : ♦️ Statut : ❌
-                    # Le bot lance la prédiction automatique du numéro 1303 (le jeu suivant immédiatement après l'échec du cycle)
-                    next_bet_game = game_number + 1
-                    logger.info(f"🔄 Statut ❌ détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game} avec costume {predicted_costume}")
-                    
-                    if self.telegram_message_sender and self.prediction_channel_id:
-                        # Préparer le texte pour le jeu suivant (N+3 par rapport à l'origine, ou simplement le numéro suivant le constat d'échec)
-                        # Le constat d'échec arrive au jeu game_number (qui est > predicted_game + 2)
-                        # On mise sur game_number + 1
-                        new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
-                        try:
-                            new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
-                            if new_msg_id:
-                                # On crée une nouvelle prédiction pour le numéro de jeu cible
-                                # make_prediction prend game_number_source (le jeu qui déclenche)
-                                # Ici, on veut que la cible soit next_bet_game, donc source = next_bet_game - 2
-                                self.make_prediction(
-                                    game_number_source=next_bet_game - 2, 
-                                    suit=predicted_costume, 
-                                    message_id_bot=new_msg_id, 
-                                    is_inter=False, 
-                                    trigger_used=f"RELANCE_AUTO_{predicted_game}"
-                                )
-                                logger.info(f"✅ Relance automatique effectuée pour Jeu {next_bet_game}")
-                        except Exception as e:
-                            logger.error(f"❌ Erreur lors de la relance automatique: {e}")
-                    # ---------------------------------------------------------
-
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
                         self.analyze_and_set_smart_rules(force_activate=True) 
@@ -918,6 +977,16 @@ class CardPredictor:
                     'new_message': updated_message,
                     'message_id_to_edit': prediction.get('message_id')
                 }
+                
+                # ====== PRÉDICTION IMMÉDIATE APRÈS ÉCHEC ======
+                logger.info(f"🔄 Lancement immédiat prédiction pour {predicted_game+3}...")
+                auto_pred = self._attempt_automatic_prediction(predicted_game + 1)
+                if auto_pred:
+                    verification_result['auto_prediction'] = auto_pred
+                    logger.info(f"✅ Prédiction auto générée immédiatement")
+                else:
+                    logger.debug("❌ Prédiction auto impossible")
+                
                 break
 
         return verification_result
@@ -993,4 +1062,3 @@ class CardPredictor:
 
 # Global instance
 card_predictor = CardPredictor()
-
