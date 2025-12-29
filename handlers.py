@@ -123,16 +123,20 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            self.send_message(chat_id, "📦 **Envoi du package koopp.zip pour déploiement...**")
-            
-            # Fichier zip pré-généré
-            zip_filename = 'koopp.zip'
+            # On utilise yoi.zip comme fichier de déploiement principal
+            zip_filename = 'yoi.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                self.send_message(chat_id, f"❌ Fichier {zip_filename} non trouvé!")
-                return
+                # Fallback sur les anciens noms si yoi n'est pas encore prêt (sécurité)
+                if os.path.exists('appo.zip'):
+                    zip_filename = 'appo.zip'
+                else:
+                    self.send_message(chat_id, "❌ Fichier de déploiement (yoi.zip) non trouvé!")
+                    return
+
+            self.send_message(chat_id, f"📦 **Envoi du nouveau package {zip_filename} corrigé...**")
             
             # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
@@ -144,14 +148,14 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **koopp.zip - Package Complet Bot ENSEIGNE v5.3**\n\n✅ Fichier: koopp.zip\n✅ Port : 10000 (Render.com)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Statuts: ✅0️⃣ (N), ✅1️⃣ (N+1), ✅2️⃣ (N+2), ❌ (pas trouvé)\n✅ Vérification: PREMIÈRE carte uniquement\n✅ Logique corrigée et testée\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire koopp.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
+                    'caption': f'📦 **{zip_filename} - Nouveau Package Corrigé**\n\n✅ Fichier: {zip_filename}\n✅ Bilan Auto: Fixé (00h, 06h, 12h, 18h)\n✅ Relance ❌: Fixée (Jeu N+1)\n✅ Vérification: Optimisée\n✅ Port : 10000 (Render.com)\n\n🎯 **Version Finale du 29/12/2025**\n\n👨‍💻 Développeur: Sossou Kouamé',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
             
             if response.json().get('ok'):
-                logger.info(f"✅ koopp.zip envoyé avec succès")
-                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 v5.3 FINAL - Bot corrigé et prêt pour production 🚀")
+                logger.info(f"✅ {zip_filename} envoyé avec succès")
+                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 Le bot est maintenant à jour avec les dernières corrections.")
             else:
                 self.send_message(chat_id, f"❌ Erreur : {response.text}")
                     
