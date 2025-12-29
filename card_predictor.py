@@ -400,7 +400,6 @@ class CardPredictor:
             cards.append(f"{v.upper()}{normalized_c}")
         return cards
         
-    # --- Logique INTER (Collecte et Analyse) ---
     def collect_inter_data(self, game_number: int, message: str):
         """Collecte les données (N-2 -> N) même sur messages temporaires (⏰)."""
         info = self.get_first_card_info(message)
@@ -901,60 +900,61 @@ class CardPredictor:
                             verification_found = True
                             logger.info(f"❌ Échec offset {offset} pour jeu {predicted_game}")
                             break
-        
-        # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
-        if verification_found:
-            break
-        
-        # ✅ Vérifier si on a dépassé le délai (game_number > predicted_game + 2)
-        if game_number > predicted_game + 2:
-            logger.warning(f"⏰ Délai dépassé pour jeu {predicted_game}. Message reçu pour {game_number} > {predicted_game + 2}")
             
-            status_symbol = "❌"
-            updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
+            # ✅ CORRECTION : Ces lignes doivent être à l'INTÉRIEUR de la boucle for predicted_game
+            # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
+            if verification_found:
+                break
             
-            prediction['status'] = 'lost'
-            prediction['final_message'] = updated_message
-            
-            # Appliquer quarantaine si INTER
-            if prediction.get('is_inter'):
-                self._apply_quarantine(prediction)
-                logger.info(f"❌ Échec INTER (délai dépassé) au jeu {game_number}: Quarantaine appliquée")
-            
-            # Relance auto
-            next_bet_game = game_number + 1
-            logger.info(f"🔄 Statut ❌ (délai dépassé) détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game}")
-            
-            if self.telegram_message_sender and self.prediction_channel_id:
-                new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
-                try:
-                    self.predictions[next_bet_game] = {
-                        'game_number_source': next_bet_game - 2,
-                        'predicted_costume': predicted_costume,
-                        'status': 'pending',
-                        'is_inter': prediction.get('is_inter', False),
-                        'timestamp': time.time(),
-                        'predicted_from_trigger': f"RELANCE_AUTO_DELAI_{predicted_game}"
-                    }
-                    self._save_data(self.predictions, 'predictions.json')
-                    
-                    new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
-                    if new_msg_id:
-                        self.predictions[next_bet_game]['message_id'] = new_msg_id
+            # ✅ Vérifier si on a dépassé le délai (game_number > predicted_game + 2)
+            if game_number > predicted_game + 2:
+                logger.warning(f"⏰ Délai dépassé pour jeu {predicted_game}. Message reçu pour {game_number} > {predicted_game + 2}")
+                
+                status_symbol = "❌"
+                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
+                
+                prediction['status'] = 'lost'
+                prediction['final_message'] = updated_message
+                
+                # Appliquer quarantaine si INTER
+                if prediction.get('is_inter'):
+                    self._apply_quarantine(prediction)
+                    logger.info(f"❌ Échec INTER (délai dépassé) au jeu {game_number}: Quarantaine appliquée")
+                
+                # Relance auto
+                next_bet_game = game_number + 1
+                logger.info(f"🔄 Statut ❌ (délai dépassé) détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game}")
+                
+                if self.telegram_message_sender and self.prediction_channel_id:
+                    new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
+                    try:
+                        self.predictions[next_bet_game] = {
+                            'game_number_source': next_bet_game - 2,
+                            'predicted_costume': predicted_costume,
+                            'status': 'pending',
+                            'is_inter': prediction.get('is_inter', False),
+                            'timestamp': time.time(),
+                            'predicted_from_trigger': f"RELANCE_AUTO_DELAI_{predicted_game}"
+                        }
                         self._save_data(self.predictions, 'predictions.json')
-                        logger.info(f"✅ Relance automatique (délai dépassé) effectuée pour Jeu {next_bet_game}")
-                except Exception as e:
-                    logger.error(f"❌ Erreur relance (délai dépassé): {e}")
-            
-            self._save_all_data()
-            
-            verification_result = {
-                'type': 'edit_message',
-                'predicted_game': str(predicted_game),
-                'new_message': updated_message,
-                'message_id_to_edit': prediction.get('message_id')
-            }
-            break
+                        
+                        new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
+                        if new_msg_id:
+                            self.predictions[next_bet_game]['message_id'] = new_msg_id
+                            self._save_data(self.predictions, 'predictions.json')
+                            logger.info(f"✅ Relance automatique (délai dépassé) effectuée pour Jeu {next_bet_game}")
+                    except Exception as e:
+                        logger.error(f"❌ Erreur relance (délai dépassé): {e}")
+                
+                self._save_all_data()
+                
+                verification_result = {
+                    'type': 'edit_message',
+                    'predicted_game': str(predicted_game),
+                    'new_message': updated_message,
+                    'message_id_to_edit': prediction.get('message_id')
+                }
+                break
     
     return verification_result
 
