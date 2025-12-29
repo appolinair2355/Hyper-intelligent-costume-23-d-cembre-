@@ -123,16 +123,20 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            self.send_message(chat_id, "📦 **Envoi du package koopp.zip pour déploiement...**")
-            
-            # Fichier zip pré-généré
-            zip_filename = 'koopp.zip'
+            # On cherche le fichier gokk.zip en priorité
+            zip_filename = 'gokk.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                self.send_message(chat_id, f"❌ Fichier {zip_filename} non trouvé!")
-                return
+                # Fallback sur koopp.zip si gokk n'est pas trouvé (pour compatibilité)
+                if os.path.exists('koopp.zip'):
+                    zip_filename = 'koopp.zip'
+                else:
+                    self.send_message(chat_id, "❌ Fichier de déploiement (gokk.zip) non trouvé!")
+                    return
+
+            self.send_message(chat_id, f"📦 **Envoi du package {zip_filename} pour déploiement...**")
             
             # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
@@ -144,7 +148,7 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **koopp.zip - Package Complet Bot ENSEIGNE v5.3**\n\n✅ Fichier: koopp.zip\n✅ Port : 10000 (Render.com)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Statuts: ✅0️⃣ (N), ✅1️⃣ (N+1), ✅2️⃣ (N+2), ❌ (pas trouvé)\n✅ Vérification: PREMIÈRE carte uniquement\n✅ Logique corrigée et testée\n✅ **Canaux préconfigurés (sans configuration manuelle)**\n\n**Déploiement Render.com:**\n1. Extraire koopp.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
+                    'caption': f'📦 **{zip_filename} - Package Complet Bot ENSEIGNE v5.4**\n\n✅ Fichier: {zip_filename}\n✅ Port : 10000 (Render.com)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Statuts: ✅0️⃣, ✅1️⃣, ✅2️⃣, ❌\n✅ **NOUVEAU: Relance automatique sur ❌**\n✅ Logique corrigée et testée\n\n**Déploiement Render.com:**\n1. Extraire le zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🇧🇯 Timezone: Africa/Porto-Novo',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)

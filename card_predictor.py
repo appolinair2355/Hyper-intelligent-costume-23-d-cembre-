@@ -866,6 +866,37 @@ class CardPredictor:
                 # Gérer les échecs statiques
                 if prediction['status'] == 'lost' and not prediction.get('is_inter'):
                     self.consecutive_fails += 1
+                    
+                    # --- NOUVELLE LOGIQUE : MISE AUTOMATIQUE SUR JEU SUIVANT ---
+                    # Si une prédiction (N, N+1, N+2) obtient le statut ❌, on mise automatiquement sur le jeu suivant.
+                    # Exemple : 🔵1300🔵 : ♦️ Statut : ❌
+                    # Le bot lance la prédiction automatique du numéro 1303 (le jeu suivant immédiatement après l'échec du cycle)
+                    next_bet_game = game_number + 1
+                    logger.info(f"🔄 Statut ❌ détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game} avec costume {predicted_costume}")
+                    
+                    if self.telegram_message_sender and self.prediction_channel_id:
+                        # Préparer le texte pour le jeu suivant (N+3 par rapport à l'origine, ou simplement le numéro suivant le constat d'échec)
+                        # Le constat d'échec arrive au jeu game_number (qui est > predicted_game + 2)
+                        # On mise sur game_number + 1
+                        new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
+                        try:
+                            new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
+                            if new_msg_id:
+                                # On crée une nouvelle prédiction pour le numéro de jeu cible
+                                # make_prediction prend game_number_source (le jeu qui déclenche)
+                                # Ici, on veut que la cible soit next_bet_game, donc source = next_bet_game - 2
+                                self.make_prediction(
+                                    game_number_source=next_bet_game - 2, 
+                                    suit=predicted_costume, 
+                                    message_id_bot=new_msg_id, 
+                                    is_inter=False, 
+                                    trigger_used=f"RELANCE_AUTO_{predicted_game}"
+                                )
+                                logger.info(f"✅ Relance automatique effectuée pour Jeu {next_bet_game}")
+                        except Exception as e:
+                            logger.error(f"❌ Erreur lors de la relance automatique: {e}")
+                    # ---------------------------------------------------------
+
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
                         self.analyze_and_set_smart_rules(force_activate=True) 
