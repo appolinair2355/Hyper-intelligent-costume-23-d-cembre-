@@ -123,17 +123,19 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            # On cherche le fichier gokk.zip en priorité
-            zip_filename = 'gokk.zip'
+            # On cherche le fichier appo.zip en priorité (CORRIGÉ 29/12/2025)
+            zip_filename = 'appo.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                # Fallback sur koopp.zip si gokk n'est pas trouvé (pour compatibilité)
-                if os.path.exists('koopp.zip'):
+                # Fallback sur gokk.zip si appo n'est pas trouvé
+                if os.path.exists('gokk.zip'):
+                    zip_filename = 'gokk.zip'
+                elif os.path.exists('koopp.zip'):
                     zip_filename = 'koopp.zip'
                 else:
-                    self.send_message(chat_id, "❌ Fichier de déploiement (gokk.zip) non trouvé!")
+                    self.send_message(chat_id, "❌ Fichier de déploiement (appo.zip) non trouvé!")
                     return
 
             self.send_message(chat_id, f"📦 **Envoi du package {zip_filename} pour déploiement...**")

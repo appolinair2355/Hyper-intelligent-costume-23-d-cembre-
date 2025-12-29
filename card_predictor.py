@@ -814,6 +814,7 @@ class CardPredictor:
             # Vérifier séquentiellement : game_number prédit, +1, +2
             verification_found = False
             verification_offset = None
+            costume_found_at_any_offset = False
             
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
@@ -840,14 +841,18 @@ class CardPredictor:
                             'message_id_to_edit': prediction.get('message_id')
                         }
                         verification_found = True
+                        costume_found_at_any_offset = True
                         break
+                    elif offset == 2:
+                        # Dernier offset (2) et costume pas trouvé = ÉCHEC IMMÉDIAT
+                        verification_found = True
             
             # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
             if verification_found:
                 break
             
-            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
-            if game_number > predicted_game + 2:
+            # Vérifier si c'est un échec : on a atteint offset 2 SANS trouver le costume, ou on a passé offset 2
+            if (game_number == predicted_game + 2 and not costume_found_at_any_offset) or game_number > predicted_game + 2:
                 status_symbol = "❌"
                 updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
