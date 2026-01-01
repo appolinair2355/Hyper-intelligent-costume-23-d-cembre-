@@ -11,14 +11,12 @@ from collections import defaultdict
 import pytz
 
 logger = logging.getLogger(__name__)
-# Mis à jour à DEBUG pour vous aider à tracer la collecte.
 logger.setLevel(logging.DEBUG) 
 
 # ================== CONFIG ==================
 BENIN_TZ = pytz.timezone("Africa/Porto-Novo")
 
 # --- 1. RÈGLES STATIQUES (13 Règles Exactes) ---
-# Si la 1ère carte du jeu N est la clé -> On prédit la valeur pour N+2
 STATIC_RULES = {
     "10♦️": "♠️", "10♠️": "❤️", 
     "9♣️": "❤️", "9♦️": "♠️",
@@ -32,8 +30,7 @@ STATIC_RULES = {
 # Symboles pour les status de vérification
 SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
 
-# Sessions de prédictions (heure_début, heure_fin)
-# 1h-6h, 9h-12h, 15h-18h, 21h-00h (00h = 24)
+# Sessions de prédictions
 PREDICTION_SESSIONS = [
     (1, 6),
     (9, 12),
@@ -755,8 +752,6 @@ class CardPredictor:
         logger.info(f"📝 Prédiction formatée: Jeu {game_number_source} → {target_game}, Costume: {predicted_costume} (Déclencheur: {self._last_trigger_used})")
         return text
 
-
-
     # --- VERIFICATION LOGIQUE ---
 
     def verify_prediction(self, message: str) -> Optional[Dict]:
@@ -819,6 +814,7 @@ class CardPredictor:
             # Vérifier séquentiellement : game_number prédit, +1, +2
             verification_found = False
             verification_offset = None
+            costume_found_at_any_offset = False
             
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
@@ -845,30 +841,74 @@ class CardPredictor:
                             'message_id_to_edit': prediction.get('message_id')
                         }
                         verification_found = True
+                        costume_found_at_any_offset = True
                         break
+                    elif offset == 2:
+                        # Dernier offset (2) et costume pas trouvé = ÉCHEC IMMÉDIAT
+                        verification_found = True
             
             # Si la vérification est résolue (trouvée ou confirmée comme échouée), on sort
             if verification_found:
                 break
             
-            # Vérifier si on a passé l'offset 2 (donc c'est un échec)
-            if game_number > predicted_game + 2:
+            # Vérifier si c'est un échec : on a atteint offset 2 SANS trouver le costume, ou on a passé offset 2
+            if (game_number == predicted_game + 2 and not costume_found_at_any_offset) or game_number > predicted_game + 2:
                 status_symbol = "❌"
                 updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
 
                 prediction['status'] = 'lost'
                 prediction['final_message'] = updated_message
                 
+                # 🔒 QUARANTAINE TOUJOURS si is_inter
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
-                    self.is_inter_mode_active = False 
-                    logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                else:
+                    if prediction['status'] == 'lost':
+                        self.is_inter_mode_active = False 
+                        logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
+                    else:
+                        logger.info(f"🔒 Quarantaine appliquée (succès): Déclencheur en quarantaine.")
+                
+                # Gérer les échecs statiques
+                if prediction['status'] == 'lost' and not prediction.get('is_inter'):
                     self.consecutive_fails += 1
+                    
+                    # --- NOUVELLE LOGIQUE : MISE AUTOMATIQUE SUR JEU SUIVANT ---
+                    # Si une prédiction (N, N+1, N+2) obtient le statut ❌, on mise automatiquement sur le jeu suivant.
+                    # Exemple : 🔵1300🔵 : ♦️ Statut : ❌
+                    # Le bot lance la prédiction automatique du numéro 1303 (le jeu suivant immédiatement après l'échec du cycle)
+                    next_bet_game = game_number + 1
+                    logger.info(f"🔄 Statut ❌ détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game} avec costume {predicted_costume}")
+                    
+                    if self.telegram_message_sender and self.prediction_channel_id:
+                        # Préparer le texte pour le jeu suivant (N+3 par rapport à l'origine, ou simplement le numéro suivant le constat d'échec)
+                        # Le constat d'échec arrive au jeu game_number (qui est > predicted_game + 2)
+                        # On mise sur game_number + 1
+                        new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
+                        try:
+                            new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
+                            if new_msg_id:
+                                # On crée une nouvelle prédiction pour le numéro de jeu cible
+                                # make_prediction prend game_number_source (le jeu qui déclenche)
+                                # Ici, on veut que la cible soit next_bet_game, donc source = next_bet_game - 2
+                                self.make_prediction(
+                                    game_number_source=next_bet_game - 2, 
+                                    suit=predicted_costume, 
+                                    message_id_bot=new_msg_id, 
+                                    is_inter=False, 
+                                    trigger_used=f"RELANCE_AUTO_{predicted_game}"
+                                )
+                                logger.info(f"✅ Relance automatique effectuée pour Jeu {next_bet_game}")
+                        except Exception as e:
+                            logger.error(f"❌ Erreur lors de la relance automatique: {e}")
+                    # ---------------------------------------------------------
+
                     if self.consecutive_fails >= 2:
                         self.single_trigger_until = time.time() + 3600
                         self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER (TOP1 uniquement pendant 1h).")
+                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER.")
+                else:
+                    if prediction['status'] == 'won':
+                        self.consecutive_fails = 0
                 
                 self._save_all_data()
 
@@ -880,8 +920,9 @@ class CardPredictor:
                 }
                 break
 
-        return verification_result    
-        def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
+        return verification_result
+
+    def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
         target = game_number_source + 2
         txt = self.prepare_prediction_text(game_number_source, suit)
         
@@ -905,40 +946,6 @@ class CardPredictor:
         self.last_predicted_game_number = game_number_source
         self.consecutive_fails = 0
         self._save_all_data()
-
-
-                
-                # 🔒 QUARANTAINE TOUJOURS si is_inter
-                if prediction.get('is_inter'):
-                    self._apply_quarantine(prediction)
-                    if prediction['status'] == 'lost':
-                        self.is_inter_mode_active = False 
-                        logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                    else:
-                        logger.info(f"🔒 Quarantaine appliquée (succès): Déclencheur en quarantaine.")
-                
-                # Gérer les échecs statiques
-                if prediction['status'] == 'lost' and not prediction.get('is_inter'):
-                    self.consecutive_fails += 1
-                    if self.consecutive_fails >= 2:
-                        self.single_trigger_until = time.time() + 3600
-                        self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER.")
-                else:
-                    if prediction['status'] == 'won':
-                        self.consecutive_fails = 0
-                
-                self._save_all_data()
-
-                verification_result = {
-                    'type': 'edit_message',
-                    'predicted_game': str(predicted_game),
-                    'new_message': updated_message,
-                    'message_id_to_edit': prediction.get('message_id')
-                }
-                break
-
-        return verification_result
 
     def reset_automatic_predictions(self) -> Dict[str, int]:
         """
