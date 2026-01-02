@@ -29,11 +29,7 @@ except ValueError as e:
     exit(1) 
 
 # 'bot' est l'instance de la classe TelegramBot
-if config.BOT_TOKEN not in ["NO_TOKEN_CONFIGURED", "INVALID_TOKEN_FORMAT"]:
-    bot = TelegramBot(config.BOT_TOKEN) 
-else:
-    logger.error("🛑 Le bot ne peut pas démarrer sans un BOT_TOKEN valide.")
-    bot = None
+bot = TelegramBot(config.BOT_TOKEN) 
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -50,7 +46,7 @@ def webhook():
             return jsonify({'status': 'ok'}), 200
 
         # Délégation du traitement complet à bot.handle_update
-        if update and bot:
+        if update:
             bot.handle_update(update)
         
         return 'OK', 200
@@ -72,9 +68,6 @@ def home():
 
 def setup_webhook():
     """Set up webhook on startup"""
-    if not bot:
-        logger.warning("⚠️ Bot non initialisé, saut du setup webhook.")
-        return
     try:
         full_webhook_url = config.get_webhook_url()
         
@@ -108,7 +101,7 @@ def reset_non_inter_predictions():
             if os.path.exists(file):
                 os.remove(file)
         
-        if bot and bot.handlers.card_predictor:
+        if bot.handlers.card_predictor:
             predictor = bot.handlers.card_predictor
             predictor.predictions = {}
             predictor.inter_data = []
@@ -127,7 +120,7 @@ def reset_non_inter_predictions():
 def send_startup_message():
     """Envoie un message de démarrage de session."""
     try:
-        if bot and bot.handlers.card_predictor:
+        if bot.handlers.card_predictor:
             predictor = bot.handlers.card_predictor
             if not predictor.telegram_message_sender or not predictor.prediction_channel_id:
                 return
@@ -154,7 +147,7 @@ def send_startup_message():
 def send_session_reports():
     """Envoie les rapports de session et redémarre le bot."""
     try:
-        if bot and bot.handlers.card_predictor:
+        if bot.handlers.card_predictor:
             logger.info("📊 Envoi du rapport de session...")
             bot.handlers.card_predictor.check_and_send_reports()
             import time
@@ -167,7 +160,7 @@ def send_session_reports():
 def update_inter_rules():
     """Mise à jour automatique des règles INTER toutes les 30 min."""
     try:
-        if bot and bot.handlers.card_predictor:
+        if bot.handlers.card_predictor:
             logger.info("🧠 Mise à jour automatique des règles INTER (30 min)...")
             bot.handlers.card_predictor.analyze_and_set_smart_rules()
     except Exception as e:

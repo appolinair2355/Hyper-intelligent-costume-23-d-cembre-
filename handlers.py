@@ -462,7 +462,6 @@ class TelegramHandlers:
         try:
             if not self.card_predictor: return
 
-            # 1. Messages normaux ou posts canaux
             if ('message' in update and 'text' in update['message']) or ('channel_post' in update and 'text' in update['channel_post']):
                 
                 msg = update.get('message') or update.get('channel_post')
@@ -474,7 +473,7 @@ class TelegramHandlers:
 
                 if not self._check_rate_limit(user_id): return
                 
-                # Commandes
+                # Commandes (le code des commandes reste inchangé)
                 if text.startswith('/inter'):
                     self._handle_command_inter(chat_id, text)
                 elif text.startswith('/config'):
@@ -500,21 +499,24 @@ class TelegramHandlers:
                 
                 # Traitement Canal Source
                 elif str(chat_id) == str(self.card_predictor.target_channel_id):
-                    # A. Collecter TOUJOURS
+                    
+                    # A. Collecter TOUJOURS (même messages temporaires ⏰)
                     game_num = self.card_predictor.extract_game_number(text)
                     if game_num:
                         self.card_predictor.collect_inter_data(game_num, text)
                     
-                    # B. Vérifier UNIQUEMENT sur messages finalisés
+                    # B. Vérifier UNIQUEMENT sur messages finalisés (✅ ou 🔰)
                     if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
                         res = self.card_predictor._verify_prediction_common(text)
+                        
                         if res and res['type'] == 'edit_message':
                             mid_to_edit = res.get('message_id_to_edit')
                             pred_channel = self.card_predictor.prediction_channel_id
+                            
                             if mid_to_edit and pred_channel:
                                 self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
                     
-                    # C. Prédire (Correction : Toujours prédire si déclencheur trouvé)
+                    # C. Prédire (même sur messages temporaires ⏰)
                     ok, num, val, is_inter = self.card_predictor.should_predict(text)
                     if ok and num and val:
                         txt = self.card_predictor.prepare_prediction_text(num, val)
@@ -522,26 +524,33 @@ class TelegramHandlers:
                         if pred_channel:
                             mid = self.send_message(pred_channel, txt)
                             if mid:
-                                trigger = self.card_predictor._last_trigger_used or '?'
+                                trigger = self.card_predictor._last_trigger_used or '?'  # ✅ Assurer str, jamais None
                                 self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter or False, trigger_used=trigger)
 
-            # 2. Messages édités
+            # 2. Messages édités (CRITIQUE pour vérification)
             elif ('edited_message' in update and 'text' in update['edited_message']) or ('edited_channel_post' in update and 'text' in update['edited_channel_post']):
+                
                 msg = update.get('edited_message') or update.get('edited_channel_post')
                 if not msg: return
                 chat_id = msg.get('chat', {}).get('id')
                 text = msg.get('text', '')
                 if not chat_id or not text: return
                 
+                # Traitement Canal Source - Vérification sur messages édités
                 if str(chat_id) == str(self.card_predictor.target_channel_id):
+                    # Collecter TOUJOURS
                     game_num = self.card_predictor.extract_game_number(text)
                     if game_num:
                         self.card_predictor.collect_inter_data(game_num, text)
+                    
+                    # Vérifier UNIQUEMENT sur messages finalisés (✅ ou 🔰)
                     if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
                         res = self.card_predictor.verify_prediction_from_edit(text)
+                        
                         if res and res['type'] == 'edit_message':
                             mid_to_edit = res.get('message_id_to_edit')
                             pred_channel = self.card_predictor.prediction_channel_id
+                            
                             if mid_to_edit and pred_channel:
                                 self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
 
@@ -549,13 +558,14 @@ class TelegramHandlers:
             elif 'callback_query' in update:
                 self._handle_callback_query(update['callback_query'])
             
-            # 4. Ajout au groupe
+            # 4. Ajout au groupe (inchangé)
             elif 'my_chat_member' in update:
                 m = update['my_chat_member']
                 if m['new_chat_member']['status'] in ['member', 'administrator']:
                     bot_id_part = self.bot_token.split(':')[0]
                     if str(m['new_chat_member']['user']['id']).startswith(bot_id_part):
                          self.send_message(m['chat']['id'], "✨ Merci de m'avoir ajouté ! Veuillez utiliser `/config` pour définir mon rôle (Source ou Prédiction).")
+
 
         except Exception as e:
             logger.error(f"Update error: {e}")

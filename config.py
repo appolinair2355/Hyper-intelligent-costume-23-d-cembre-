@@ -64,21 +64,10 @@ class Config:
             if token:
                 logger.info("✅ BOT_TOKEN chargé depuis variables d'environnement")
         
-        # Fallback pour le développement sur Replit
         if not token:
-            token = os.getenv('AI_INTEGRATIONS_OPENAI_API_KEY') # Juste pour éviter le plantage immédiat si pas de token
-            if token:
-                 logger.warning("⚠️ BOT_TOKEN non trouvé, utilisation d'un secret par défaut pour test.")
-
-        if not token:
-            # On ne lève plus d'exception fatale ici pour permettre au bot de démarrer
-            # même si le token est configuré plus tard ou via une autre méthode
-            logger.error("❌ BOT_TOKEN non trouvé dans secrets_config.json ou environment variables.")
-            return "NO_TOKEN_CONFIGURED"
-            
+            raise ValueError("BOT_TOKEN not found in secrets_config.json or environment variables.")
         if ':' not in token or not token.split(':')[0].isdigit():
-            logger.error("Invalid bot token format")
-            return "INVALID_TOKEN_FORMAT"
+            raise ValueError("Invalid bot token format")
 
         logger.info(f"✅ BOT_TOKEN configuré: {token[:10]}...")
         return token
