@@ -94,8 +94,14 @@ class CardPredictor:
         self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
         self.last_report_sent = self._load_data('last_report_sent.json')
         
-        # 🔥 SUIVI D'UTILISATIONS POUR CYCLE 2 UTILISATIONS
+        # 🔥 SUIVI D'UTILISATIONS PERSISTANT (ne se reset PAS à chaque analyse)
         self.trigger_usage_tracker = self._load_data('trigger_usage_tracker.json') or {}
+        
+        # 🔄 SUIVI DU DERNIER TOP UTILISÉ POUR CHAQUE COSTUME (Round-Robin)
+        self.last_trigger_index_by_suit: Dict[str, int] = {}
+        
+        # 🎯 TRACKER pour éviter les doubles prédictions en attente
+        self.pending_predictions_tracker: Dict[int, float] = {}
         
         if self.is_inter_mode_active is None:
             self.is_inter_mode_active = True
@@ -257,9 +263,9 @@ class CardPredictor:
             logger.debug(f"⏭️ Heure {now.hour}h n'est pas une heure de rapport")
             return
         
-        # 🎯 S'envoyer à l'heure pile avec marge de 5 minutes
-        if now.minute > 5:
-            logger.debug(f"⏭️ Minute {now.minute} hors fenêtre [0-5] pour heure {now.hour}h")
+        # 🎯 S'envoyer STRICTEMENT à l'heure pile (minute 0) avec marge de 2 minutes max
+        if now.minute > 2:
+            logger.debug(f"⏭️ Minute {now.minute} hors fenêtre [0-2] pour heure {now.hour}h")
             return
         
         key = f"{key_date}_{now.hour}"
@@ -521,7 +527,7 @@ class CardPredictor:
     def analyze_and_set_smart_rules(self, chat_id: Optional[int] = None, initial_load: bool = False, force_activate: bool = False):
         """
         Analyse les données pour trouver les Top 4 déclencheurs par ENSEIGNE DE RÉSULTAT.
-        ✅ Réinitialise les compteurs pour TOUS les déclencheurs qui reviennent dans les TOP.
+        ✅ NE RESET PAS les compteurs existants (ils persistent entre analyses)
         """
         # 🛡️ SÉCURITÉ: S'assurer que trigger_usage_tracker est bien un dict
         if not isinstance(self.trigger_usage_tracker, dict):
@@ -561,25 +567,30 @@ class CardPredictor:
                 })
                 current_top_triggers.add(trigger_card)
         
-        # 🎯 PHASE CRITIQUE : Réinitialisation des compteurs
+        # 🎯 PHASE CRITIQUE : Initialiser SEULEMENT les nouveaux déclencheurs
         reset_count = 0
         for trigger in current_top_triggers:
-            # ✅ Réinitialiser le compteur à 0 pour chaque déclencheur dans les TOP
-            self.trigger_usage_tracker[trigger] = {
-                'uses': 0,
-                'last_reset': time.time(),
-                'total_uses': self.trigger_usage_tracker.get(trigger, {}).get('total_uses', 0)
-            }
-            reset_count += 1
-            logger.info(f"🔄 Compteur reset pour {trigger} (retour dans les TOP)")
+            if trigger not in self.trigger_usage_tracker:
+                # ✅ Initialiser à 0 UNIQUEMENT si nouveau
+                self.trigger_usage_tracker[trigger] = {
+                    'uses': 0,
+                    'last_reset': time.time(),
+                    'total_uses': 0
+                }
+                reset_count += 1
+                logger.info(f"🔄 Nouveau déclencheur initialisé: {trigger} (0/2)")
         
         # 🗑️ Nettoyer les déclencheurs qui ne sont plus dans les TOP
         triggers_to_remove = set(self.trigger_usage_tracker.keys()) - current_top_triggers
         for trigger in triggers_to_remove:
-            del self.trigger_usage_tracker[trigger]
-            logger.info(f"🗑️ Déclencheur {trigger} retiré du tracker")
+            if trigger in self.trigger_usage_tracker:
+                del self.trigger_usage_tracker[trigger]
+                logger.info(f"🗑️ Déclencheur {trigger} retiré du tracker")
         
-        logger.info(f"🎯 {len(current_top_triggers)} déclencheurs en cycle, {reset_count} réinitialisés")
+        # 🎯 RESET du suivi round-robin pour les nouveaux tops
+        self.last_trigger_index_by_suit = {}
+        
+        logger.info(f"🎯 {len(current_top_triggers)} déclencheurs en cycle, {reset_count} nouveaux initialisés")
         
         # Activation du mode INTER
         if force_activate:
@@ -598,7 +609,7 @@ class CardPredictor:
         
         # Notification
         if chat_id is not None and self.telegram_message_sender:
-            msg = f"✅ Analyse terminée !\n{len(self.smart_rules)} règles créées.\n🔄 Compteurs reset (cycle 2 utilisations)"
+            msg = f"✅ Analyse terminée !\n{len(self.smart_rules)} règles créées."
             self.telegram_message_sender(chat_id, msg)
         
         # Sortie de quarantaine
@@ -616,17 +627,149 @@ class CardPredictor:
                 logger.error(f"Erreur traitement quarantaine {key}: {e}")
 
     def check_and_update_rules(self):
-        """Vérification périodique (30 minutes)."""
-        if time.time() - self.last_analysis_time > 1800:
-            logger.info("🧠 Mise à jour INTER périodique (30 min).")
+        """🔄 Mise à jour périodique (10 minutes) au lieu de 30."""
+        if time.time() - self.last_analysis_time > 600:  # 10 minutes = 600 secondes
+            logger.info("🧠 Mise à jour INTER périodique (10 min).")
             if len(self.inter_data) >= 3:
                 self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id, force_activate=True)
             else:
                 self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id)
 
     def check_and_send_automatic_predictions(self):
-        """DÉSACTIVÉ - Les prédictions sont basées sur les messages du canal source uniquement."""
-        pass
+        """
+        🎯 ENVOIE des prédictions automatiques basées sur les TOP 4 avec round-robin
+        ✅ Vérifie l'ÉCART STRICT de 3 entre les prédictions
+        ✅ Vérifie qu'il n'y a PAS de prédiction non vérifiée en attente
+        """
+        if not self.telegram_message_sender or not self.prediction_channel_id:
+            logger.debug("⚠️ Pas de sender ou prediction_channel_id pour predictions auto")
+            return
+        
+        if not self.is_in_session():
+            logger.debug("⚠️ Hors session pour prediction auto")
+            return
+        
+        if not self.smart_rules or not self.is_inter_mode_active:
+            logger.debug("⚠️ Pas de smart_rules ou mode INTER inactif")
+            return
+        
+        # 🎯 VÉRIFICATION PRINCIPALE : Pas de prédiction PENDING
+        pending_predictions = [p for p in self.predictions.values() if p.get('status') == 'pending']
+        if pending_predictions:
+            logger.debug(f"⏭️ Il y a {len(pending_predictions)} prédiction(s) en attente, pas de nouvelle prédiction auto")
+            
+            # 🎯 EXCEPTION : Si le dernier jeu prédit + 3 est dépassé, on peut prédire quand même
+            last_pending_game = max(self.predictions.keys())
+            next_expected_game = self.last_predicted_game_number + 3
+            
+            # Si on a dépassé le prochain jeu attendu, on peut forcer
+            if last_pending_game < next_expected_game:
+                logger.debug(f"✅ Exception: Délai dépassé, nouvelle prédiction autorisée")
+            else:
+                return
+        
+        # Déterminer le prochain jeu à prédire (écart de 3 STRICT)
+        if not self.last_predicted_game_number:
+            logger.debug("⚠️ Pas de last_predicted_game_number")
+            return
+        
+        next_game = self.last_predicted_game_number + 3
+        
+        # 🎯 VÉRIFICATION CRITIQUE : L'écart DOIT être exactement 3
+        if self.last_predicted_game_number and (next_game - self.last_predicted_game_number != 3):
+            logger.debug(f"❌ Écart incorrect pour prediction auto: {next_game - self.last_predicted_game_number} != 3")
+            return
+        
+        # Vérifier si on a déjà une prédiction pour ce jeu
+        if next_game in self.predictions and self.predictions[next_game].get('status') == 'pending':
+            logger.debug(f"⏭️ Prédiction déjà existante pour jeu {next_game}")
+            return
+        
+        # Sélectionner un costume avec round-robin
+        predicted_suit = None
+        trigger_used = None
+        rule_index = 0
+        
+        rules_by_suit = defaultdict(list)
+        for rule in self.smart_rules:
+            rules_by_suit[rule['predict']].append(rule)
+        
+        # Essayer chaque costume dans l'ordre
+        for suit in ['♠️', '❤️', '♦️', '♣️']:
+            suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
+            
+            if not suit_rules:
+                continue
+            
+            # Round-robin pour ce costume
+            last_idx = self.last_trigger_index_by_suit.get(suit, -1)
+            
+            for i in range(len(suit_rules)):
+                idx = (last_idx + i + 1) % len(suit_rules)  # Cyclique
+                rule = suit_rules[idx]
+                trigger = rule['trigger']
+                
+                # Vérifier quarantaine
+                key = f"{trigger}_{rule['predict']}"
+                if key in self.quarantined_rules:
+                    qua_data = self.quarantined_rules[key]
+                    if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
+                        continue
+                    elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
+                        continue
+                
+                # Vérifier cooldown d'utilisation
+                tracker = self.trigger_usage_tracker.get(trigger, {'uses': 0})
+                if tracker['uses'] >= 2:
+                    continue
+                
+                # On a trouvé notre déclencheur
+                predicted_suit = rule['predict']
+                trigger_used = trigger
+                rule_index = idx + 1
+                self.last_trigger_index_by_suit[suit] = idx
+                
+                logger.info(f"🤖 PREDICTION AUTO: TOP{rule_index} {trigger} → {predicted_suit}")
+                break
+            
+            if predicted_suit:
+                break
+        
+        if not predicted_suit:
+            logger.debug("⚠️ Aucun déclencheur disponible pour prediction auto")
+            return
+        
+        # Créer et envoyer la prédiction
+        txt = self.prepare_prediction_text(next_game - 2, predicted_suit)
+        
+        try:
+            mid = self.telegram_message_sender(self.prediction_channel_id, txt)
+            if mid:
+                self.predictions[next_game] = {
+                    'predicted_costume': predicted_suit,
+                    'status': 'pending',
+                    'predicted_from': next_game - 2,
+                    'predicted_from_trigger': trigger_used,
+                    'message_text': txt,
+                    'message_id': mid,
+                    'is_inter': True,
+                    'rule_index': rule_index,
+                    'timestamp': time.time(),
+                    'is_automatic': True  # Marquer comme automatique
+                }
+                
+                # Incrémenter le compteur
+                if trigger_used in self.trigger_usage_tracker:
+                    self.trigger_usage_tracker[trigger_used]['uses'] += 1
+                    self.trigger_usage_tracker[trigger_used]['total_uses'] += 1
+                
+                self.last_prediction_time = time.time()
+                self.last_predicted_game_number = next_game - 2
+                self._save_all_data()
+                
+                logger.info(f"✅ Prédiction auto envoyée pour jeu {next_game} (ÉCART 3 respecté)")
+        except Exception as e:
+            logger.error(f"❌ Erreur envoi prediction auto: {e}")
 
     def get_bot_status(self):
         total = len(self.predictions)
@@ -667,11 +810,32 @@ class CardPredictor:
             message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
             message += f"📊 **{len(self.smart_rules)} règles** créées ({data_count} jeux analysés) - **TOP 4 par enseigne**:\n\n"
             
+            # 🎯 AFFICHER SEULEMENT LES DÉCLENCHEURS DISPONIBLES (uses < 2)
             for suit in ['♠️', '❤️', '♦️', '♣️']:
                 if suit in rules_by_result:
                     message += f"**Pour prédire {suit}:**\n"
-                    for rule in rules_by_result[suit]:
-                        message += f"  • {rule['trigger']} ({rule['count']}x)\n"
+                    
+                    # Trier par count décroissant
+                    sorted_rules = sorted(rules_by_result[suit], key=lambda x: x.get('count', 0), reverse=True)
+                    
+                    for idx, rule in enumerate(sorted_rules):
+                        trigger = rule['trigger']
+                        count = rule['count']
+                        
+                        # Vérifier si le déclencheur est disponible
+                        tracker = self.trigger_usage_tracker.get(trigger, {'uses': 0})
+                        if tracker['uses'] >= 2:
+                            # Déclencheur épuisé - ne pas afficher
+                            continue
+                        
+                        message += f"  • {trigger} ({count}x) - {2 - tracker['uses']} utilisations restantes\n"
+                    
+                    # Si tous sont épuisés, afficher un message
+                    available_count = sum(1 for r in sorted_rules 
+                                          if self.trigger_usage_tracker.get(r['trigger'], {}).get('uses', 0) < 2)
+                    if available_count == 0:
+                        message += "  ⚠️ Tous les TOP 4 sont épuisés\n"
+                    
                     message += "\n"
             
             if self.is_inter_mode_active:
@@ -762,7 +926,7 @@ class CardPredictor:
 
         logger.info(f"🎮 Jeu source: {game_number} → Cartes 1er groupe: {cards}")
 
-        # ======= MODE INTER : PRIORITÉ ABSOLUE (TOP 4 avec cycle) =======
+        # ======= MODE INTER : PRIORITÉ ABSOLUE (TOP 4 avec ROUND-ROBIN) =======
         if self.is_inter_mode_active and self.smart_rules:
             rules_by_suit = defaultdict(list)
             for rule in self.smart_rules:
@@ -773,16 +937,18 @@ class CardPredictor:
             is_inter_prediction = False
             rule_index = 0
             
-            # Chercher dans les 4 premiers déclencheurs de chaque couleur
+            # Chercher dans les 4 premiers déclencheurs de chaque couleur avec ROUND-ROBIN
             for suit in ['♠️', '❤️', '♦️', '♣️']:
-                suit_rules = sorted(
-                    rules_by_suit.get(suit, []), 
-                    key=lambda x: x.get('count', 0), 
-                    reverse=True
-                )
+                suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
                 
-                # 🎯 Parcourir les TOP 4
-                for idx in range(min(4, len(suit_rules))):
+                if not suit_rules:
+                    continue
+                
+                # 🎯 ROUND-ROBIN: commencer après le dernier utilisé
+                last_idx = self.last_trigger_index_by_suit.get(suit, -1)
+                
+                for i in range(len(suit_rules)):
+                    idx = (last_idx + i + 1) % len(suit_rules)  # Cyclique
                     rule = suit_rules[idx]
                     trigger = rule['trigger']
                     
@@ -803,12 +969,16 @@ class CardPredictor:
                             logger.debug(f"🔒 Règle en quarantaine: {key}")
                             continue
                     
-                    # ✅ UTILISER ce déclencheur
+                    # ✅ UTILISER ce déclencheur (ROUND-ROBIN)
                     predicted_suit = rule['predict']
                     trigger_used = trigger
                     is_inter_prediction = True
                     rule_index = idx + 1
-                    logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit} (utilisations: {tracker['uses']}/2)")
+                    
+                    # 🔄 Mettre à jour l'index pour le prochain tour
+                    self.last_trigger_index_by_suit[suit] = idx
+                    
+                    logger.info(f"🔮 INTER ROUND-ROBIN (TOP{rule_index}): {trigger_used} → {predicted_suit} (utilisations: {tracker['uses']}/2)")
                     break
                 
                 if predicted_suit:
@@ -906,35 +1076,6 @@ class CardPredictor:
             'message_id_to_edit': prediction.get('message_id')
         }
 
-    def _auto_relaunch(self, game_number, costume, original_prediction):
-        """Crée une nouvelle prédiction automatique après échec."""
-        next_bet_game = game_number + 1
-        logger.info(f"🔄 RELANCE AUTO: Jeu {next_bet_game}")
-        
-        if not self.telegram_message_sender or not self.prediction_channel_id:
-            logger.error("❌ Impossible de relancer: sender ou channel_id manquant")
-            return
-        
-        new_txt = f"🔵{next_bet_game}🔵:{costume} statut :⏳"
-        try:
-            self.predictions[next_bet_game] = {
-                'game_number_source': next_bet_game - 2,
-                'predicted_costume': costume,
-                'status': 'pending',
-                'is_inter': original_prediction.get('is_inter', False),
-                'timestamp': time.time(),
-                'predicted_from_trigger': f"RELANCE_AUTO_{game_number}"
-            }
-            self._save_data(self.predictions, 'predictions.json')
-            
-            new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
-            if new_msg_id:
-                self.predictions[next_bet_game]['message_id'] = new_msg_id
-                self._save_data(self.predictions, 'predictions.json')
-                logger.info(f"✅ Relance créée pour jeu {next_bet_game}")
-        except Exception as e:
-            logger.error(f"❌ Erreur relance: {e}")
-
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
         """Logique de vérification commune - UNIQUEMENT pour messages finalisés."""
         self.check_and_send_reports()
@@ -997,9 +1138,6 @@ class CardPredictor:
                         if prediction.get('is_inter'):
                             self._apply_quarantine(prediction)
                             logger.info(f"🔒 Quarantaine appliquée")
-                        
-                        # Relance automatique
-                        self._auto_relaunch(game_number, predicted_costume, prediction)
 
                     return self._finalize_verification(prediction, predicted_game, predicted_costume, symbol, status)
 
@@ -1017,10 +1155,11 @@ class CardPredictor:
                 logger.warning(f"⏰ DÉLAI DÉPASSÉ: Jeu {predicted_game} (msg {game_number})")
                 symbol = '❌'
                 
-                # Quarantaine + relance
+                # Quarantaine si INTER
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
-                self._auto_relaunch(game_number, predicted_costume, prediction)
+                
+                # ❌ PAS DE RELANCE AUTO (supprimée)
                 
                 return self._finalize_verification(prediction, predicted_game, predicted_costume, symbol, 'lost')
 
