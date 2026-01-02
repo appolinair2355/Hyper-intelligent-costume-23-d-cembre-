@@ -107,42 +107,78 @@ class CardPredictor:
 
     # --- Persistance ---
     def _load_data(self, filename: str, is_set: bool = False, is_scalar: bool = False) -> Any:
+        """
+        Charge les données avec validation stricte du type.
+        Retourne TOUJOURS le type attendu, même si le fichier est corrompu.
+        """
         try:
             # Détection des types de fichiers
-            is_dict = filename in [
+            is_dict_file = filename in [
                 'channels_config.json', 'predictions.json', 
                 'sequential_history.json', 'smart_rules.json', 
-                'pending_edits.json', 'trigger_usage_tracker.json'
+                'pending_edits.json', 'trigger_usage_tracker.json',
+                'quarantined_rules.json'
             ]
             
             if not os.path.exists(filename):
-                return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                # Retourne le type par défaut
+                if is_set: 
+                    return set()
+                if is_scalar: 
+                    return None
+                if is_dict_file:
+                    return {}
+                return []
             
             with open(filename, 'r') as f:
                 content = f.read().strip()
                 if not content: 
-                    return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                    # Fichier vide = type par défaut
+                    if is_set: 
+                        return set()
+                    if is_scalar: 
+                        return None
+                    if is_dict_file:
+                        return {}
+                    return []
                 
                 data = json.loads(content)
-                if is_set: 
-                    return set(data)
                 
-                # Conversion des clés en entiers si nécessaire
-                if filename in [
-                    'sequential_history.json', 'predictions.json', 
-                    'pending_edits.json', 'trigger_usage_tracker.json'
-                ] and isinstance(data, dict): 
-                    return {int(k): v for k, v in data.items()}
+                # VALIDATION STRICTE DU TYPE
+                if is_set:
+                    return set(data) if isinstance(data, list) else set()
                 
-                return data
+                if filename in ['sequential_history.json', 'predictions.json', 'pending_edits.json']:
+                    # Doit être dict avec clés entières
+                    if isinstance(data, dict):
+                        return {int(k): v for k, v in data.items()}
+                    logger.error(f"⚠️ {filename} corrompu: attendait dict, reçu {type(data)}")
+                    return {}
+                
+                if filename == 'trigger_usage_tracker.json':
+                    # Doit être dict, PAS list
+                    if isinstance(data, dict):
+                        return data
+                    logger.error(f"⚠️ {filename} corrompu: attendait dict, reçu {type(data)} - RESET")
+                    return {}
+                
+                if is_dict_file:
+                    # Tous les autres fichiers dict
+                    if isinstance(data, dict):
+                        return data
+                    logger.error(f"⚠️ {filename} corrompu: attendait dict, reçu {type(data)}")
+                    return {}
+                
+                return data if isinstance(data, list) else []
+                
         except Exception as e:
-            logger.error(f"⚠️ Erreur chargement {filename}: {e}")
-            is_dict = filename in [
-                'channels_config.json', 'predictions.json', 
-                'sequential_history.json', 'smart_rules.json', 
-                'pending_edits.json', 'trigger_usage_tracker.json'
-            ]
-            return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+            logger.error(f"❌ Erreur critique chargement {filename}: {e}")
+            
+            # En cas d'erreur, retourner le type sécurisé
+            if is_set: return set()
+            if is_scalar: return None
+            if is_dict_file: return {}
+            return []
 
     def _save_data(self, data: Any, filename: str):
         try:
@@ -487,6 +523,11 @@ class CardPredictor:
         Analyse les données pour trouver les Top 4 déclencheurs par ENSEIGNE DE RÉSULTAT.
         ✅ Réinitialise les compteurs pour TOUS les déclencheurs qui reviennent dans les TOP.
         """
+        # 🛡️ SÉCURITÉ: S'assurer que trigger_usage_tracker est bien un dict
+        if not isinstance(self.trigger_usage_tracker, dict):
+            logger.error(f"🚨 trigger_usage_tracker corrompu: {type(self.trigger_usage_tracker)} - RESET")
+            self.trigger_usage_tracker = {}
+        
         # Grouper par enseigne de RÉSULTAT
         result_suit_groups = defaultdict(lambda: defaultdict(int))
         for entry in self.inter_data:
@@ -850,176 +891,141 @@ class CardPredictor:
         logger.debug(f"❌ Costume {normalized_costume} non trouvé dans {', '.join(all_cards)}")
         return False
 
+    def _finalize_verification(self, prediction, game, costume, symbol, status):
+        """Finalise et sauvegarde une prédiction vérifiée."""
+        prediction['status'] = status
+        prediction['verification_count'] = 2 if symbol == '✅2️⃣' else (1 if symbol == '✅1️⃣' else (0 if symbol == '✅0️⃣' else 99))
+        prediction['final_message'] = f"🔵{game}🔵:{costume} statut :{symbol}"
+        self.consecutive_fails = 0
+        self._save_all_data()
+
+        return {
+            'type': 'edit_message',
+            'predicted_game': str(game),
+            'new_message': prediction['final_message'],
+            'message_id_to_edit': prediction.get('message_id')
+        }
+
+    def _auto_relaunch(self, game_number, costume, original_prediction):
+        """Crée une nouvelle prédiction automatique après échec."""
+        next_bet_game = game_number + 1
+        logger.info(f"🔄 RELANCE AUTO: Jeu {next_bet_game}")
+        
+        if not self.telegram_message_sender or not self.prediction_channel_id:
+            logger.error("❌ Impossible de relancer: sender ou channel_id manquant")
+            return
+        
+        new_txt = f"🔵{next_bet_game}🔵:{costume} statut :⏳"
+        try:
+            self.predictions[next_bet_game] = {
+                'game_number_source': next_bet_game - 2,
+                'predicted_costume': costume,
+                'status': 'pending',
+                'is_inter': original_prediction.get('is_inter', False),
+                'timestamp': time.time(),
+                'predicted_from_trigger': f"RELANCE_AUTO_{game_number}"
+            }
+            self._save_data(self.predictions, 'predictions.json')
+            
+            new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
+            if new_msg_id:
+                self.predictions[next_bet_game]['message_id'] = new_msg_id
+                self._save_data(self.predictions, 'predictions.json')
+                logger.info(f"✅ Relance créée pour jeu {next_bet_game}")
+        except Exception as e:
+            logger.error(f"❌ Erreur relance: {e}")
+
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
         """Logique de vérification commune - UNIQUEMENT pour messages finalisés."""
         self.check_and_send_reports()
         
+        # 1️⃣ EXTRACTION
         game_number = self.extract_game_number(message)
         if not game_number: 
-            logger.debug(f"❌ Aucun numéro de jeu extrait du message")
+            logger.warning("❌ Vérification: Aucun numéro extrait")
             return None
         
-        # Validation Structurelle
-        is_structurally_valid = self.is_final_result_structurally_valid(message)
-        if not is_structurally_valid: 
-            logger.debug(f"❌ Message non valide structurellement pour le jeu {game_number}")
+        if not self.is_final_result_structurally_valid(message):
+            logger.warning(f"❌ Vérification: Message structuralement invalide {message[:30]}")
             return None
 
         if not self.predictions: 
-            logger.debug("❌ Aucune prédiction en attente")
+            logger.debug("❌ Vérification: Aucune prédiction en attente")
             return None
         
-        verification_result = None
-
-        # --- VÉRIFICATION SÉQUENTIELLE ---
+        logger.info(f"🔍 VÉRIFICATION DÉMARRÉE - Message jeu {game_number}")
+        
+        # 2️⃣ PARCOURS DES PRÉDICTIONS
         for predicted_game in sorted(self.predictions.keys()):
             prediction = self.predictions[predicted_game]
 
             if prediction.get('status') != 'pending': 
+                logger.debug(f"⏭️ Jeu {predicted_game} status = {prediction.get('status')}")
                 continue
 
             predicted_costume = prediction.get('predicted_costume')
             if not predicted_costume: 
+                logger.warning(f"⚠️ Jeu {predicted_game} sans costume")
                 continue
 
-            logger.info(f"🎯 Vérification prédiction pour jeu {predicted_game} (costume: {predicted_costume}) avec message reçu jeu {game_number}")
+            logger.info(f"🎯 Test: Prédiction {predicted_game} ({predicted_costume}) vs Message {game_number}")
 
-            # Vérifier séquentiellement
-            verification_found = False
-            
+            # 3️⃣ VÉRIFICATION OFFSETS
             for offset in [0, 1, 2]:
-                check_game_number = predicted_game + offset
+                check_game = predicted_game + offset
                 
-                if game_number == check_game_number:
-                    costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
-                    
-                    if costume_found:
-                        # Succès
-                        status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
-                        updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-                        
-                        prediction['status'] = 'won'
-                        prediction['verification_count'] = offset
-                        prediction['final_message'] = updated_message
-                        self.consecutive_fails = 0
-                        self._save_all_data()
+                if game_number != check_game:
+                    logger.debug(f"  📐 Offset {offset}: {game_number} != {check_game}")
+                    continue
+                
+                logger.info(f"  ✅ MATCH offset {offset}: {game_number} == {check_game}")
+                costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
+                logger.info(f"  🃏 Costume '{predicted_costume}' trouvé: {costume_found}")
 
-                        verification_result = {
-                            'type': 'edit_message',
-                            'predicted_game': str(predicted_game),
-                            'new_message': updated_message,
-                            'message_id_to_edit': prediction.get('message_id')
-                        }
-                        verification_found = True
-                        logger.info(f"✅ Succès offset {offset} pour jeu {predicted_game}")
-                        break
+                # 🎯 CLÔTURE OBLIGATOIRE À OFFSET 2
+                if offset == 2:
+                    if costume_found:
+                        status = 'won'
+                        symbol = '✅2️⃣'
+                        logger.info(f"🎉 SUCCÈS: Jeu {predicted_game} clôturé à offset 2")
                     else:
-                        # Échec au dernier offset
-                        if offset == 2:
-                            status_symbol = "❌"
-                            updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-                            
-                            prediction['status'] = 'lost'
-                            prediction['final_message'] = updated_message
-                            
-                            # Quarantaine si INTER
-                            if prediction.get('is_inter'):
-                                self._apply_quarantine(prediction)
-                                logger.info(f"❌ Échec INTER au jeu {game_number}: Quarantaine appliquée")
-                            
-                            # Relance auto
-                            next_bet_game = game_number + 1
-                            logger.info(f"🔄 Statut ❌ détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game}")
-                            
-                            if self.telegram_message_sender and self.prediction_channel_id:
-                                new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
-                                try:
-                                    self.predictions[next_bet_game] = {
-                                        'game_number_source': next_bet_game - 2,
-                                        'predicted_costume': predicted_costume,
-                                        'status': 'pending',
-                                        'is_inter': prediction.get('is_inter', False),
-                                        'timestamp': time.time(),
-                                        'predicted_from_trigger': f"RELANCE_AUTO_{predicted_game}"
-                                    }
-                                    self._save_data(self.predictions, 'predictions.json')
-                                    
-                                    new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
-                                    if new_msg_id:
-                                        self.predictions[next_bet_game]['message_id'] = new_msg_id
-                                        self._save_data(self.predictions, 'predictions.json')
-                                        logger.info(f"✅ Relance automatique effectuée pour Jeu {next_bet_game}")
-                                except Exception as e:
-                                    logger.error(f"❌ Erreur relance: {e}")
-                            
-                            self._save_all_data()
-                            
-                            verification_result = {
-                                'type': 'edit_message',
-                                'predicted_game': str(predicted_game),
-                                'new_message': updated_message,
-                                'message_id_to_edit': prediction.get('message_id')
-                            }
-                            verification_found = True
-                            logger.info(f"❌ Échec offset {offset} pour jeu {predicted_game}")
-                            break
-            
-            # Vérifier délai dépassé
+                        status = 'lost'
+                        symbol = '❌'
+                        logger.warning(f"❌ ÉCHEC: Jeu {predicted_game} clôturé à offset 2")
+                        
+                        # Quarantaine si INTER
+                        if prediction.get('is_inter'):
+                            self._apply_quarantine(prediction)
+                            logger.info(f"🔒 Quarantaine appliquée")
+                        
+                        # Relance automatique
+                        self._auto_relaunch(game_number, predicted_costume, prediction)
+
+                    return self._finalize_verification(prediction, predicted_game, predicted_costume, symbol, status)
+
+                # Offsets 0 et 1: costume trouvé = succès immédiat
+                if costume_found:
+                    symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
+                    logger.info(f"✅ SUCCÈS: Jeu {predicted_game} clôturé à offset {offset}")
+                    return self._finalize_verification(prediction, predicted_game, predicted_costume, symbol, 'won')
+                
+                # Offsets 0 et 1: costume pas trouvé = continue
+                logger.debug(f"  ⏭️ Costume pas trouvé à offset {offset}, continue")
+
+            # 4️⃣ DÉLAI DÉPASSÉ
             if game_number > predicted_game + 2:
-                logger.warning(f"⏰ Délai dépassé pour jeu {predicted_game}. Message reçu pour {game_number} > {predicted_game + 2}")
+                logger.warning(f"⏰ DÉLAI DÉPASSÉ: Jeu {predicted_game} (msg {game_number})")
+                symbol = '❌'
                 
-                status_symbol = "❌"
-                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-                
-                prediction['status'] = 'lost'
-                prediction['final_message'] = updated_message
-                
-                # Quarantaine si INTER
+                # Quarantaine + relance
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
-                    logger.info(f"❌ Échec INTER (délai dépassé) au jeu {game_number}: Quarantaine appliquée")
+                self._auto_relaunch(game_number, predicted_costume, prediction)
                 
-                # Relance auto
-                next_bet_game = game_number + 1
-                logger.info(f"🔄 Statut ❌ (délai dépassé) détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game}")
-                
-                if self.telegram_message_sender and self.prediction_channel_id:
-                    new_txt = f"🔵{next_bet_game}🔵:{predicted_costume} statut :⏳"
-                    try:
-                        self.predictions[next_bet_game] = {
-                            'game_number_source': next_bet_game - 2,
-                            'predicted_costume': predicted_costume,
-                            'status': 'pending',
-                            'is_inter': prediction.get('is_inter', False),
-                            'timestamp': time.time(),
-                            'predicted_from_trigger': f"RELANCE_AUTO_DELAI_{predicted_game}"
-                        }
-                        self._save_data(self.predictions, 'predictions.json')
-                        
-                        new_msg_id = self.telegram_message_sender(self.prediction_channel_id, new_txt)
-                        if new_msg_id:
-                            self.predictions[next_bet_game]['message_id'] = new_msg_id
-                            self._save_data(self.predictions, 'predictions.json')
-                            logger.info(f"✅ Relance automatique (délai dépassé) effectuée pour Jeu {next_bet_game}")
-                    except Exception as e:
-                        logger.error(f"❌ Erreur relance (délai dépassé): {e}")
-                
-                self._save_all_data()
-                
-                verification_result = {
-                    'type': 'edit_message',
-                    'predicted_game': str(predicted_game),
-                    'new_message': updated_message,
-                    'message_id_to_edit': prediction.get('message_id')
-                }
-                verification_found = True
-                break
-            
-            # Sortir si vérification résolue
-            if verification_found:
-                break
-        
-        return verification_result
+                return self._finalize_verification(prediction, predicted_game, predicted_costume, symbol, 'lost')
+
+        logger.warning(f"⚠️ AUCUNE PRÉDICTION CORRESPONDANTE pour jeu {game_number}")
+        return None
 
 
     def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
