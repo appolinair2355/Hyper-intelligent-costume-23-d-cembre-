@@ -1,4 +1,4 @@
-# card_predictor.py - VERSION CORRIGÉE ET OPTIMISÉE
+# card_predictor.py - VERSION CORRIGÉE ET STABILISÉE
 
 import re
 import logging
@@ -17,15 +17,15 @@ logger.setLevel(logging.DEBUG)
 BENIN_TZ = pytz.timezone("Africa/Porto-Novo")
 
 # --- 1. RÈGLES STATIQUES (13 Règles Exactes) ---
-# Toutes les clés normalisées vers ♥️ pour cohérence
+# Toutes les clés normalisées vers ❤️ pour cohérence interne
 STATIC_RULES = {
-    "10♦️": "♠️", "10♠️": "♥️", 
-    "9♣️": "♥️", "9♦️": "♠️",
+    "10♦️": "♠️", "10♠️": "❤️", 
+    "9♣️": "❤️", "9♦️": "♠️",
     "8♣️": "♠️", "8♠️": "♣️", 
     "7♠️": "♠️", "7♣️": "♣️",
     "6♦️": "♣️", "6♣️": "♦️", 
-    "A♥️": "♥️", 
-    "5♥️": "♥️", "5♠️": "♠️"
+    "A❤️": "❤️", 
+    "5❤️": "❤️", "5♠️": "♠️"
 }
 
 # Symboles pour les status de vérification (normalisés)
@@ -48,15 +48,16 @@ class CardPredictor:
         self._last_trigger_used = None
 
         # --- A. Chargement des Données ---
-        self.predictions = self._load_data('predictions.json') 
+        # CORRECTION : force_dict=True pour les dictionnaires
+        self.predictions = self._load_data('predictions.json', force_dict=True) 
         self.processed_messages = self._load_data('processed.json', is_set=True) 
         self.last_prediction_time = self._load_data('last_prediction_time.json', is_scalar=True) or 0
         self.last_predicted_game_number = self._load_data('last_predicted_game_number.json', is_scalar=True) or 0
         self.consecutive_fails = self._load_data('consecutive_fails.json', is_scalar=True) or 0
-        self.pending_edits: Dict[int, Dict] = self._load_data('pending_edits.json')
+        self.pending_edits: Dict[int, Dict] = self._load_data('pending_edits.json', force_dict=True)
         
         # --- B. Configuration Canaux ---
-        raw_config = self._load_data('channels_config.json')
+        raw_config = self._load_data('channels_config.json', force_dict=True)
         self.config_data = raw_config if isinstance(raw_config, dict) else {}
         
         self.target_channel_id = self.config_data.get('target_channel_id')
@@ -73,20 +74,21 @@ class CardPredictor:
         self.telegram_message_sender = telegram_message_sender
         self.active_admin_chat_id = self._load_data('active_admin_chat_id.json', is_scalar=True)
         
-        self.sequential_history: Dict[int, Dict] = self._load_data('sequential_history.json') 
+        # CORRECTION : force_dict=True pour les dictionnaires
+        self.sequential_history: Dict[int, Dict] = self._load_data('sequential_history.json', force_dict=True) 
         self.inter_data: List[Dict] = self._load_data('inter_data.json') 
         self.is_inter_mode_active = self._load_data('inter_mode_status.json', is_scalar=True)
-        self.smart_rules = self._load_data('smart_rules.json')
+        self.smart_rules = self._load_data('smart_rules.json') 
         self.last_analysis_time = self._load_data('last_analysis_time.json', is_scalar=True) or 0
         self.collected_games = self._load_data('collected_games.json', is_set=True)
         
         self.single_trigger_until = self._load_data('single_trigger_until.json', is_scalar=True) or 0
         
         # Nouvelles données
-        self.quarantined_rules = self._load_data('quarantined_rules.json')
+        self.quarantined_rules = self._load_data('quarantined_rules.json', force_dict=True)
         self.wait_until_next_update = self._load_data('wait_until_next_update.json', is_scalar=True) or 0
         self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
-        self.last_report_sent = self._load_data('last_report_sent.json')
+        self.last_report_sent = self._load_data('last_report_sent.json', force_dict=True)
         
         if self.is_inter_mode_active is None:
             self.is_inter_mode_active = True
@@ -97,56 +99,106 @@ class CardPredictor:
              self.analyze_and_set_smart_rules(initial_load=True)
 
     # --- Persistance ---
-    def _load_data(self, filename: str, is_set: bool = False, is_scalar: bool = False) -> Any:
+    def _load_data(self, filename: str, is_set: bool = False, is_scalar: bool = False, force_dict: bool = False) -> Any:
+        """
+        Charge les données depuis un fichier JSON avec gestion robuste des types.
+        
+        Args:
+            filename: Nom du fichier
+            is_set: Si True, retourne un set (par défaut: list)
+            is_scalar: Si True, retourne un scalaire (par défaut: None)
+            force_dict: Si True, FORCE le retour d'un dictionnaire (prioritaire sur is_set)
+        """
         try:
-            is_dict = filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
+            # Déterminer le type attendu
+            expects_dict = force_dict or filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
             
             if not os.path.exists(filename):
-                return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                if is_set: return set()
+                if is_scalar: return None
+                return {} if expects_dict else []
+                
             with open(filename, 'r') as f:
                 content = f.read().strip()
-                if not content: return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                if not content:
+                    if is_set: return set()
+                    if is_scalar: return None
+                    return {} if expects_dict else []
+                    
                 data = json.loads(content)
-                if is_set: return set(data)
-                if filename in ['sequential_history.json', 'predictions.json', 'pending_edits.json'] and isinstance(data, dict): 
-                    return {int(k): v for k, v in data.items()}
+                
+                # Conversion des types
+                if is_set:
+                    return set(data) if isinstance(data, list) else set()
+                    
+                # Force dict si nécessaire
+                if expects_dict:
+                    if isinstance(data, dict):
+                        # Conversion des clés en int pour certains fichiers
+                        if filename in ['sequential_history.json', 'predictions.json', 'pending_edits.json']:
+                            return {int(k): v for k, v in data.items()}
+                        return data
+                    else:
+                        logger.warning(f"⚠️ {filename} devrait être un dict, mais c'est un {type(data).__name__}. Retour d'un dict vide.")
+                        return {}
+                
+                # Retour par défaut
                 return data
+                
         except Exception as e:
-            logger.error(f"⚠️ Erreur chargement {filename}: {e}")
-            is_dict = filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
-            return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+            logger.error(f"❌ Erreur chargement {filename}: {e}")
+            expects_dict = force_dict or filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
+            if is_set: return set()
+            if is_scalar: return None
+            return {} if expects_dict else []
 
     def _save_data(self, data: Any, filename: str):
+        """Sauvegarde les données dans un fichier JSON avec gestion des types."""
         try:
-            if isinstance(data, set): data = list(data)
+            # Conversion pour JSON
+            if isinstance(data, set):
+                data = list(data)
+            
+            # S'assurer que channels_config.json a des IDs int
             if filename == 'channels_config.json' and isinstance(data, dict):
                 if 'target_channel_id' in data and data['target_channel_id'] is not None:
                     data['target_channel_id'] = int(data['target_channel_id'])
                 if 'prediction_channel_id' in data and data['prediction_channel_id'] is not None:
                     data['prediction_channel_id'] = int(data['prediction_channel_id'])
             
-            with open(filename, 'w') as f: json.dump(data, f, indent=4)
-        except Exception as e: logger.error(f"❌ Erreur sauvegarde {filename}: {e}")
+            # Log pour debug
+            logger.debug(f"💾 Sauvegarde {filename} ({type(data).__name__})")
+            
+            with open(filename, 'w') as f:
+                json.dump(data, f, indent=4)
+                
+        except Exception as e:
+            logger.error(f"❌ Erreur sauvegarde {filename}: {e}")
 
     def _save_all_data(self):
-        self._save_data(self.predictions, 'predictions.json')
-        self._save_data(self.processed_messages, 'processed.json')
-        self._save_data(self.last_prediction_time, 'last_prediction_time.json')
-        self._save_data(self.last_predicted_game_number, 'last_predicted_game_number.json')
-        self._save_data(self.consecutive_fails, 'consecutive_fails.json')
-        self._save_data(self.inter_data, 'inter_data.json')
-        self._save_data(self.sequential_history, 'sequential_history.json')
-        self._save_data(self.is_inter_mode_active, 'inter_mode_status.json')
-        self._save_data(self.smart_rules, 'smart_rules.json')
-        self._save_data(self.active_admin_chat_id, 'active_admin_chat_id.json')
-        self._save_data(self.last_analysis_time, 'last_analysis_time.json')
-        self._save_data(self.pending_edits, 'pending_edits.json')
-        self._save_data(self.collected_games, 'collected_games.json')
-        self._save_data(self.single_trigger_until, 'single_trigger_until.json')
-        self._save_data(self.quarantined_rules, 'quarantined_rules.json')
-        self._save_data(self.wait_until_next_update, 'wait_until_next_update.json')
-        self._save_data(self.last_inter_update_time, 'last_inter_update.json')
-        self._save_data(self.last_report_sent, 'last_report_sent.json')
+        """Sauvegarde TOUS les fichiers de données."""
+        try:
+            self._save_data(self.predictions, 'predictions.json')
+            self._save_data(self.processed_messages, 'processed.json')
+            self._save_data(self.last_prediction_time, 'last_prediction_time.json')
+            self._save_data(self.last_predicted_game_number, 'last_predicted_game_number.json')
+            self._save_data(self.consecutive_fails, 'consecutive_fails.json')
+            self._save_data(self.inter_data, 'inter_data.json')
+            self._save_data(self.sequential_history, 'sequential_history.json')
+            self._save_data(self.is_inter_mode_active, 'inter_mode_status.json')
+            self._save_data(self.smart_rules, 'smart_rules.json')
+            self._save_data(self.active_admin_chat_id, 'active_admin_chat_id.json')
+            self._save_data(self.last_analysis_time, 'last_analysis_time.json')
+            self._save_data(self.pending_edits, 'pending_edits.json')
+            self._save_data(self.collected_games, 'collected_games.json')
+            self._save_data(self.single_trigger_until, 'single_trigger_until.json')
+            self._save_data(self.quarantined_rules, 'quarantined_rules.json')
+            self._save_data(self.wait_until_next_update, 'wait_until_next_update.json')
+            self._save_data(self.last_inter_update_time, 'last_inter_update.json')
+            self._save_data(self.last_report_sent, 'last_report_sent.json')
+            logger.debug("💾 Toutes les données sauvegardées avec succès")
+        except Exception as e:
+            logger.error(f"❌ Erreur sauvegarde globale : {e}")
 
     # ======== TEMPS & SESSIONS ========
     def now(self):
@@ -807,7 +859,10 @@ class CardPredictor:
         return False
 
     def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
-        """Logique de vérification commune - UNIQUEMENT pour messages finalisés."""
+        """
+        Logique de vérification commune - UNIQUEMENT pour messages finalisés.
+        CORRECTION PRINCIPALE : Logique des offsets corrigée pour éviter l'erreur 'list' object has no attribute 'keys'
+        """
         self.check_and_send_reports()
         
         game_number = self.extract_game_number(message)
@@ -831,9 +886,8 @@ class CardPredictor:
         verification_result = None
 
         # --- VÉRIFICATION SÉQUENTIELLE CORRIGÉE ---
-        for predicted_game in sorted(self.predictions.keys()):
-            prediction = self.predictions[predicted_game]
-
+        # CORRECTION : Utilisation de .items() sur un dictionnaire garanti
+        for predicted_game, prediction in self.predictions.items():
             if prediction.get('status') != 'pending': 
                 continue
 
