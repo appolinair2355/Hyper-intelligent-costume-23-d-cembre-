@@ -13,7 +13,6 @@ logger.setLevel(logging.INFO)
 
 # Importation Robuste
 try:
-    # Assurez-vous d'utiliser la version de CardPredictor que j'ai corrigée (avec Top 2 par enseigne)
     from card_predictor import CardPredictor
 except ImportError:
     logger.error("❌ IMPOSSIBLE D'IMPORTER CARDPREDICTOR")
@@ -38,46 +37,47 @@ Je prédis la prochaine Enseigne (Couleur) en utilisant :
 • `/stat` - Voir l'état du bot (canaux, mode actif)
 
 **🔹 Mode Intelligent (INTER)**
-• `/inter status` - Voir les règles apprises (Top 2 par enseigne)
+• `/inter status` - Voir les règles apprises (Top 4 par enseigne)
 • `/inter activate` - **Activer manuellement** le mode intelligent
 • `/inter default` - Désactiver et revenir aux règles statiques
 
 **🔹 Collecte de Données**
 • `/collect` - Voir toutes les données collectées par enseigne
-• `/reset` - Réinitialiser les prédictions automatiques (garde INTER/Collect)
+• `/reset` - ⚠️ Réinitialiser COMPLÈTEMENT le bot
 
 **🔹 Configuration**
 • `/config` - Configurer les rôles des canaux (Source/Prédiction)
 
 **🔹 Déploiement & Maintenance**
 • `/deploy` - Télécharger le package pour Render.com
-• `/qua` - État de la quarantaine et statistiques
-• `/reset` - ⚠️ Réinitialiser COMPLÈTEMENT le bot
+• `/qua` - **VOIR les TOP utilisés et leurs statistiques**
+• `/bilan` - Aperçu du prochain rapport
 
 ━━━━━━━━━━━━━━━━━━━━━
 **💡 Comment ça marche ?**
 ━━━━━━━━━━━━━━━━━━━━━
 
 1️⃣ Le bot surveille le canal SOURCE
-2️⃣ Détecte les cartes et fait des prédictions
-3️⃣ Envoie les prédictions dans le canal PRÉDICTION
-4️⃣ Vérifie automatiquement les résultats
-5️⃣ Collecte les données en continu pour apprentissage
+2️⃣ Détecte les cartes et fait des prédictions (manuelles + automatiques)
+3️⃣ Vérifie TOUS les messages pour clôturer les prédictions
+4️⃣ Collecte les données en continu pour apprentissage
+5️⃣ Prédictions automatiques sur détection de TOP 4
 
 🧠 **Mode INTER** : 
 • Collecte automatique des données de jeu
-• Mise à jour des règles toutes les 30 min
-• **Activation MANUELLE uniquement** (commande `/inter activate`)
-• Utilise les Top 2 déclencheurs par enseigne (♠️♥️♦️♣️)
+• Mise à jour des règles toutes les 10 min
+• Prédictions automatiques après analyse TOP 4
+• **ÉCART STRICT de 3 entre les prédictions**
+• **PAS de double prédiction non vérifiée**
 
 ━━━━━━━━━━━━━━━━━━━━━
-⚠️ **Important** : Le mode INTER doit être activé manuellement avec `/inter activate`
+⚠️ **Important** : Le mode INTER doit être activé avec `/inter activate`
 """
 
 HELP_MESSAGE = """
 🤖 **AIDE COMMANDE /INTER**
 
-• `/inter status` : Voir les règles apprises (Top 2 par Enseigne).
+• `/inter status` : Voir les règles apprises (Top 4 par Enseigne) avec utilisations.
 • `/inter activate` : Forcer l'activation de l'IA et relancer l'analyse.
 • `/inter default` : Revenir aux règles statiques.
 """
@@ -123,13 +123,11 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            # On utilise pack.zip comme fichier de déploiement principal
             zip_filename = 'pack.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                # Fallback sur les anciens noms pour compatibilité
                 for fallback in ['yoi.zip', 'appo.zip']:
                     if os.path.exists(fallback):
                         zip_filename = fallback
@@ -138,26 +136,25 @@ class TelegramHandlers:
                     self.send_message(chat_id, "❌ Fichier de déploiement (pack.zip) non trouvé!")
                     return
 
-            self.send_message(chat_id, f"📦 **Envoi du nouveau package pack.zip corrigé...**")
+            self.send_message(chat_id, f"📦 **Envoi du package {zip_filename}...**")
             
-            # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
             with open(zip_filename, 'rb') as f:
                 files = {'document': (zip_filename, f, 'application/zip')}
-                # Compter les données collectées
+                
                 data_count = len(self.card_predictor.inter_data) if self.card_predictor else 0
                 rules_count = len(self.card_predictor.smart_rules) if self.card_predictor else 0
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **pack.zip - Nouveau Package Corrigé**\n\n✅ Fichier: pack.zip\n✅ Bilan Auto: Fixé (6h, 12h, 18h, 0h)\n✅ Relance ❌: Fixée (Jeu N+1 avec même costume)\n✅ Vérification: Optimisée\n✅ Port : 10000 (Render.com)\n✅ Délai dépassé: Détecté (N+2)\n\n🎯 **Version du 29/12/2025 - Corrections Finales**\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229',
+                    'caption': f'📦 **{zip_filename} - Package BOT**\n\n✅ Mode INTER: Active\n✅ Bilans: 6h,12h,18h,0h\n✅ MAJ INTER: 10min\n✅ Écart: 3 (strict)\n✅ Prédictions auto: ON\n✅ Vérification: Tous les messages\n\n📊 Données: {data_count} jeux\n🧠 Règles: {rules_count} TOP 4\n\n👨‍💻 Dev: Sossou Kouamé\n🎟️ Code: Koua229',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
             
             if response.json().get('ok'):
                 logger.info(f"✅ {zip_filename} envoyé avec succès")
-                self.send_message(chat_id, f"✅ **pack.zip envoyé avec succès!**\n\n🎯 Le bot est maintenant à jour avec les dernières corrections:\n• Relance ❌ avec même costume\n• Vérification du délai N+2\n• Rapports auto à 6h, 12h, 18h, 0h")
+                self.send_message(chat_id, f"✅ **{zip_filename} envoyé!**")
             else:
                 self.send_message(chat_id, f"❌ Erreur : {response.text}")
                     
@@ -245,9 +242,9 @@ class TelegramHandlers:
             logger.error(f"❌ Erreur aperçu bilan: {e}")
             self.send_message(chat_id, "❌ Erreur lors du calcul du bilan.")
     
-    # --- GESTION COMMANDE /qua (QUARANTAINE) ---
+    # --- GESTION COMMANDE /qua (QUARANTAINE + TOP UTILISÉS) ---
     def _handle_command_qua(self, chat_id: int):
-        """Affiche l'état et les informations secrètes du bot."""
+        """Affiche l'état, les TOP utilisés et les statistiques secrètes du bot."""
         if not self.card_predictor:
             self.send_message(chat_id, "❌ Le moteur de prédiction n'est pas chargé.")
             return
@@ -256,12 +253,12 @@ class TelegramHandlers:
             cp = self.card_predictor
             now = cp.now()
             
-            message = "🔒 ÉTAT ET INFORMATIQUE SECRET DU BOT\n\n"
+            message = "🔒 **ÉTAT ET INFORMATIQUE SECRÈTE DU BOT**\n\n"
             
             # TOP en quarantaine
             qua_list = cp.quarantined_rules if cp.quarantined_rules else {}
             if qua_list:
-                message += "🔒 TOP EN QUARANTAINE:\n"
+                message += "🔒 **TOP EN QUARANTAINE:**\n"
                 for key in qua_list.keys():
                     try:
                         trigger, suit = key.split("_", 1)
@@ -272,29 +269,55 @@ class TelegramHandlers:
             else:
                 message += "✅ Aucun TOP en quarantaine\n\n"
             
-            # Les 5 dernières prédictions
+            # 🎯 LES 5 DERNIERES PRÉDICTIONS avec TOP utilisé
             recent_preds = sorted(
                 [(k, v) for k, v in cp.predictions.items() if v.get('timestamp')],
                 key=lambda x: x[1].get('timestamp', 0),
                 reverse=True
             )[:5]
             
-            message += "📊 Les 5 dernières prédictions envoyées\n"
+            message += "📊 **Les 5 dernières prédictions envoyées**\n"
             if recent_preds:
                 for game_num, pred in recent_preds:
                     trigger = pred.get('predicted_from_trigger', '?')
                     suit = pred.get('predicted_costume', '?')
                     status = pred.get('status', 'pending')
                     is_inter = "🧠 INTER" if pred.get('is_inter') else "📋 STATIQUE"
+                    is_auto = "🤖 AUTO" if pred.get('is_automatic') else "👤 MANUEL"
                     status_display = {
                         'pending': '⏳',
                         'won': '✅',
                         'lost': '❌'
                     }.get(status, '?')
-                    message += f"  • Jeu {game_num}: {suit} ({status_display}) - Déclencheur: {trigger} [{is_inter}]\n"
+                    # Voir le TOP utilisé (rule_index)
+                    rule_idx = pred.get('rule_index', '?')
+                    message += f"  • Jeu {game_num}: {suit} ({status_display}) - TOP{rule_idx} {trigger} [{is_inter}] [{is_auto}]\n"
             else:
                 message += "  Aucune prédiction\n"
             message += "\n"
+            
+            # 🎯 TOP UTILISÉS et leurs statistiques
+            if cp.smart_rules:
+                message += "📋 **TOP 4 PAR ENSEIGNE - UTILISATIONS:**\n\n"
+                rules_by_suit = defaultdict(list)
+                for rule in cp.smart_rules:
+                    rules_by_suit[rule.get('predict', rule.get('result_suit'))].append(rule)
+                
+                for suit in ['♠️', '❤️', '♦️', '♣️']:
+                    if suit in rules_by_suit:
+                        message += f"Pour predire {suit}:\n"
+                        sorted_rules = sorted(rules_by_suit[suit], key=lambda x: x.get('count', 0), reverse=True)
+                        for idx, rule in enumerate(sorted_rules, 1):
+                            trigger = rule.get('trigger', '?')
+                            count = rule.get('count', 0)
+                            uses = cp.trigger_usage_tracker.get(trigger, {}).get('uses', 0)
+                            total_uses = cp.trigger_usage_tracker.get(trigger, {}).get('total_uses', 0)
+                            # Statut du déclencheur
+                            status = "✅ DISPONIBLE" if uses < 2 else "❌ ÉPUISÉ"
+                            message += f"  {idx}. {trigger} ({count}x) - {uses}/2 (total: {total_uses}) [{status}]\n"
+                        message += "\n"
+            else:
+                message += "⚠️ Pas encore de règles INTER\n\n"
             
             # Prochain bilan
             next_report_hour = None
@@ -308,31 +331,22 @@ class TelegramHandlers:
             minutes_until = ((next_report_hour - now.hour) * 60 - now.minute) % (24 * 60)
             hours = minutes_until // 60
             mins = minutes_until % 60
-            message += f"⏰ Prochain bilan dans: {hours}h{mins:02d}\n\n"
+            message += f"⏰ Prochain bilan dans: {hours}h{mins:02d} (à {next_report_hour:02d}h00)\n\n"
             
             # Mode INTER
             message += f"🧠 Mode INTER: {'✅ ACTIF' if cp.is_inter_mode_active else '❌ INACTIF'}\n\n"
             
             # Données collectées
-            message += f"📈 Donnees collectees: {len(cp.inter_data)} jeux\n"
+            message += f"📈 Données collectées: {len(cp.inter_data)} jeux\n"
             
-            # Règles INTER complètes
-            if cp.smart_rules:
-                message += "📋 Regles UTILISER INTELLIGENT :\n\n"
-                rules_by_suit = defaultdict(list)
-                for rule in cp.smart_rules:
-                    rules_by_suit[rule.get('predict', rule.get('result_suit'))].append(rule)
-                
-                for suit in ['♠️', '❤️', '♦️', '♣️']:
-                    if suit in rules_by_suit:
-                        message += f"Pour predire {suit}:\n"
-                        for rule in rules_by_suit[suit]:
-                            trigger = rule.get('trigger', '?')
-                            count = rule.get('count', 0)
-                            message += f"  • {trigger} ({count}x)\n"
-                        message += "\n"
-            else:
-                message += "📋 Pas encore de regles INTER\n"
+            # Prédictions en attente
+            pending_count = sum(1 for p in cp.predictions.values() if p.get('status') == 'pending')
+            message += f"⏳ Prédictions en attente: {pending_count}\n"
+            
+            # Écart actuel
+            if cp.last_predicted_game_number:
+                next_gap = cp.last_predicted_game_number + 3
+                message += f"📐 Prochain écart attendu: {next_gap}\n"
             
             self.send_message(chat_id, message)
         except Exception as e:
@@ -377,22 +391,24 @@ class TelegramHandlers:
             cp.target_channel_id = saved_target_id
             cp.prediction_channel_id = saved_pred_id
             cp.is_inter_mode_active = False
+            cp.trigger_usage_tracker = {}  # Reset tracker
+            cp.last_trigger_index_by_suit = {}  # Reset round-robin
             cp._save_all_data()
             
-            message = (f"✅ RÉINITIALISATION COMPLÈTE\n\n"
-                       f"📋 DONNÉES SUPPRIMÉES:\n"
+            message = (f"✅ **RÉINITIALISATION COMPLÈTE**\n\n"
+                       f"📋 **DONNÉES SUPPRIMÉES:**\n"
                        f"  • {pred_count} prédictions\n"
                        f"  • {inter_count} jeux collectés\n"
-                       f"  • {rules_count} règles TOP 2\n"
+                       f"  • {rules_count} règles TOP 4\n"
                        f"  • {qua_count} TOP en quarantaine\n"
                        f"  • {games_count} jeux dans collections\n"
-                       f"  • historique_sequentiel.json\n"
-                       f"  • pending_edits.json\n\n"
-                       f"✅ DONNÉES CONSERVÉES:\n"
+                       f"  • Trigger usage tracker\n\n"
+                       f"✅ **DONNÉES CONSERVÉES:**\n"
                        f"  • Canal Source: {saved_target_id}\n"
                        f"  • Canal Prédiction: {saved_pred_id}\n\n"
-                       f"Mode INTER: DÉSACTIVÉ ❌\n"
-                       f"Bot: VIERGE ET PRÊT 🎯")
+                       f"🧠 Mode INTER: DÉSACTIVÉ ❌\n"
+                       f"📊 Tracker: RESET à 0\n"
+                       f"🎯 Bot: VIERGE ET PRÊT ✅")
             
             self.send_message(chat_id, message)
             logger.info("🔄 Reset complet effectué")
@@ -412,7 +428,7 @@ class TelegramHandlers:
         
         if action == 'activate':
             self.card_predictor.analyze_and_set_smart_rules(chat_id=chat_id, force_activate=True)
-            self.send_message(chat_id, "✅ **MODE INTER ACTIVÉ**\nL'analyse Top 2 par enseigne est en cours...")
+            self.send_message(chat_id, "✅ **MODE INTER ACTIVÉ**\nAnalyse Top 4 par enseigne en cours...")
         
         elif action == 'default':
             self.card_predictor.is_inter_mode_active = False
@@ -437,14 +453,12 @@ class TelegramHandlers:
         # Actions INTER
         if data == 'inter_apply':
             self.card_predictor.analyze_and_set_smart_rules(chat_id=chat_id, force_activate=True)
-            # Mise à jour du message pour confirmer l'action
             msg, kb = self.card_predictor.get_inter_status()
             self.send_message(chat_id, msg, message_id=msg_id, edit=True, reply_markup=kb)
         
         elif data == 'inter_default':
             self.card_predictor.is_inter_mode_active = False
             self.card_predictor._save_all_data()
-            # Mise à jour du message pour confirmer l'action
             msg, kb = self.card_predictor.get_inter_status()
             self.send_message(chat_id, msg, message_id=msg_id, edit=True, reply_markup=kb)
             
@@ -455,13 +469,14 @@ class TelegramHandlers:
             else:
                 type_c = 'source' if 'source' in data else 'prediction'
                 self.card_predictor.set_channel_id(chat_id, type_c)
-                self.send_message(chat_id, f"✅ Ce canal est maintenant défini comme **{type_c.upper()}**.\n(L'ID forcé dans le code sera utilisé si le bot redémarre sans ce fichier de config)", message_id=msg_id, edit=True)
+                self.send_message(chat_id, f"✅ Ce canal est maintenant défini comme **{type_c.upper()}**.", message_id=msg_id, edit=True)
 
-    # --- UPDATES (PARTIE CORRIGÉE) ---
+    # --- UPDATES (PARTIE CRITIQUE MODIFIÉE) ---
     def handle_update(self, update: Dict[str, Any]):
         try:
             if not self.card_predictor: return
 
+            # 1. Messages normaux (canal ou privé)
             if ('message' in update and 'text' in update['message']) or ('channel_post' in update and 'text' in update['channel_post']):
                 
                 msg = update.get('message') or update.get('channel_post')
@@ -497,26 +512,37 @@ class TelegramHandlers:
                 elif text.startswith('/bilan'):
                     self._handle_command_bilan(chat_id)
                 
-                # Traitement Canal Source
+                # 🎯 TRAITEMENT CRITIQUE DU CANAL SOURCE
                 elif str(chat_id) == str(self.card_predictor.target_channel_id):
                     
-                    # A. Collecter TOUJOURS (même messages temporaires ⏰)
+                    # A. 🧠 Collecter TOUJOURS les données (même messages temporaires)
                     game_num = self.card_predictor.extract_game_number(text)
                     if game_num:
                         self.card_predictor.collect_inter_data(game_num, text)
                     
-                    # B. Vérifier UNIQUEMENT sur messages finalisés (✅ ou 🔰)
-                    if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
-                        res = self.card_predictor._verify_prediction_common(text)
-                        
-                        if res and res['type'] == 'edit_message':
-                            mid_to_edit = res.get('message_id_to_edit')
-                            pred_channel = self.card_predictor.prediction_channel_id
-                            
-                            if mid_to_edit and pred_channel: 
-                                self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
+                    # B. 🔍 VÉRIFIER TOUS les messages pour les numéros de jeu prédits
+                    # Ceci assure que même les messages sans ✅ ou 🔰 sont vérifiés
+                    for pred_game_num, prediction in list(self.card_predictor.predictions.items()):
+                        if prediction.get('status') == 'pending':
+                            # Vérifier offset 0, 1 et 2
+                            for offset in [0, 1, 2]:
+                                expected_game = pred_game_num + offset
+                                if game_num == expected_game:
+                                    # Message correspond à une prédiction en attente
+                                    res = self.card_predictor._verify_prediction_common(text)
+                                    if res and res['type'] == 'edit_message':
+                                        mid_to_edit = res.get('message_id_to_edit')
+                                        pred_channel = self.card_predictor.prediction_channel_id
+                                        
+                                        if mid_to_edit and pred_channel:
+                                            self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
+                                            logger.info(f"✅ Vérification automatique: Jeu {pred_game_num} +{offset} → {res['new_message']}")
                     
-                    # C. Prédire (même sur messages temporaires ⏰)
+                    # C. 🤖 Lancer prédiction automatique si TOP 4 détecté
+                    # Cette fonction vérifie elle-même l'écart de 3 et pas de double prédiction
+                    self.card_predictor.check_and_send_automatic_predictions()
+                    
+                    # D. 👤 Prédiction manuelle (si nécessaire, après l'auto)
                     ok, num, val, is_inter = self.card_predictor.should_predict(text)
                     if ok and num and val:
                         txt = self.card_predictor.prepare_prediction_text(num, val)
@@ -524,10 +550,11 @@ class TelegramHandlers:
                         if pred_channel:
                             mid = self.send_message(pred_channel, txt)
                             if mid:
-                                trigger = self.card_predictor._last_trigger_used or '?'  # ✅ Assurer str, jamais None
-                                self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter or False, trigger_used=trigger)
+                                trigger = self.card_predictor._last_trigger_used or '?'
+                                self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter, trigger_used=trigger)
+                                logger.info(f"👤 Prédiction manuelle envoyée: Jeu {num} → {val}")
 
-            # 2. Messages édités (CRITIQUE pour vérification)
+            # 2. Messages édités (même logique de vérification complète)
             elif ('edited_message' in update and 'text' in update['edited_message']) or ('edited_channel_post' in update and 'text' in update['edited_channel_post']):
                 
                 msg = update.get('edited_message') or update.get('edited_channel_post')
@@ -538,23 +565,27 @@ class TelegramHandlers:
                 
                 # Traitement Canal Source - Vérification sur messages édités
                 if str(chat_id) == str(self.card_predictor.target_channel_id):
-                    # Collecter TOUJOURS
+                    # Collecter
                     game_num = self.card_predictor.extract_game_number(text)
                     if game_num:
                         self.card_predictor.collect_inter_data(game_num, text)
                     
-                    # Vérifier UNIQUEMENT sur messages finalisés (✅ ou 🔰)
-                    if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
-                        res = self.card_predictor.verify_prediction_from_edit(text)
-                        
-                        if res and res['type'] == 'edit_message':
-                            mid_to_edit = res.get('message_id_to_edit')
-                            pred_channel = self.card_predictor.prediction_channel_id
-                            
-                            if mid_to_edit and pred_channel:
-                                self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
+                    # Vérifier tous les offsets pour les prédictions en attente
+                    for pred_game_num, prediction in list(self.card_predictor.predictions.items()):
+                        if prediction.get('status') == 'pending':
+                            for offset in [0, 1, 2]:
+                                expected_game = pred_game_num + offset
+                                if game_num == expected_game:
+                                    res = self.card_predictor.verify_prediction_from_edit(text)
+                                    if res and res['type'] == 'edit_message':
+                                        mid_to_edit = res.get('message_id_to_edit')
+                                        pred_channel = self.card_predictor.prediction_channel_id
+                                        
+                                        if mid_to_edit and pred_channel:
+                                            self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
+                                            logger.info(f"✅ Vérification éditée: Jeu {pred_game_num} +{offset}")
 
-            # 3. Callbacks
+            # 3. Callbacks (inchangés)
             elif 'callback_query' in update:
                 self._handle_callback_query(update['callback_query'])
             
