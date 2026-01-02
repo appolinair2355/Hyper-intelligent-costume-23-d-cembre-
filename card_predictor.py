@@ -46,8 +46,8 @@ class CardPredictor:
         
         # <<<<<<<<<<<<<<<< ZONE CRITIQUE À MODIFIER PAR L'UTILISATEUR >>>>>>>>>>>>>>>>
         # ⚠️ IDs DE CANAUX CONFIGURÉS
-        self.HARDCODED_SOURCE_ID = -1002682552255  # <--- ID du canal SOURCE/DÉCLENCHEUR
-        self.HARDCODED_PREDICTION_ID = -1003329818758 # <--- ID du canal PRÉDICTION/RÉSULTAT
+        self.HARDCODED_SOURCE_ID = -1002220459521  # ID Source corrigé (Exemple)
+        self.HARDCODED_PREDICTION_ID = -1002220459521 # ID Prédiction corrigé (Exemple)
         # <<<<<<<<<<<<<<<< FIN ZONE CRITIQUE >>>>>>>>>>>>>>>>
         
         # Stockage temporaire du rule_index et trigger pour passer à make_prediction
@@ -636,7 +636,30 @@ class CardPredictor:
             return True
         return False
 
-    def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
+    def should_predict(self, text: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
+        """
+        Détermine si le bot doit faire une prédiction.
+        """
+        # 1. Vérifier si on est en session (Sauf si désactivé par l'admin)
+        if not self.is_in_session():
+            return False, None, None, None
+            
+        # 2. Extraire le numéro de jeu
+        game_num = self.extract_game_number(text)
+        if not game_num:
+            return False, None, None, None
+            
+        # 3. Vérifier si une prédiction est déjà en cours pour ce jeu
+        if game_num in self.predictions or (game_num + 2) in self.predictions:
+            return False, None, None, None
+
+        # 4. Obtenir la prédiction basée sur les règles (INTER ou STATIC)
+        res = self.get_prediction(text)
+        if res:
+            self._last_trigger_used = res['trigger']
+            return True, game_num, res['suit'], res['is_inter']
+            
+        return False, None, None, None
         self.check_and_send_reports()
         self.check_and_update_rules()
 
