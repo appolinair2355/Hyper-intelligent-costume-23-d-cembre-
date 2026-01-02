@@ -6,7 +6,6 @@ import json
 from collections import defaultdict
 from typing import Dict, Any, Optional
 import requests
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,8 +23,6 @@ user_message_counts = defaultdict(list)
 # --- MESSAGES UTILISATEUR NETTOYÉS ---
 WELCOME_MESSAGE = """
 👋 **BIENVENUE SUR LE BOT ENSEIGNE !** ♠️♥️♦️♣️
-
-🚀 **version : hyper intelligent 2026 est activé**
 
 Je prédis la prochaine Enseigne (Couleur) en utilisant :
 1. **Règles statiques** : Patterns prédéfinis (ex: 10♦️ → ♠️)
@@ -51,10 +48,8 @@ Je prédis la prochaine Enseigne (Couleur) en utilisant :
 **🔹 Configuration**
 • `/config` - Configurer les rôles des canaux (Source/Prédiction)
 
-**🔹 Déploiement & Maintenance**
+**🔹 Déploiement**
 • `/deploy` - Télécharger le package pour Render.com
-• `/qua` - État de la quarantaine et statistiques
-• `/reset` - ⚠️ Réinitialiser COMPLÈTEMENT le bot
 
 ━━━━━━━━━━━━━━━━━━━━━
 **💡 Comment ça marche ?**
@@ -125,20 +120,16 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            # On utilise hooo.zip comme fichier de déploiement principal
-            zip_filename = 'hooo.zip'
+            self.send_message(chat_id, "📦 **Envoi du package appo.zip pour déploiement...**")
+            
+            # Fichier zip pré-généré
+            zip_filename = 'appo.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                # Fallback sur pack.zip
-                if os.path.exists('pack.zip'):
-                    zip_filename = 'pack.zip'
-                else:
-                    self.send_message(chat_id, "❌ Fichier de déploiement (hooo.zip) non trouvé!")
-                    return
-
-            self.send_message(chat_id, f"📦 **Envoi du nouveau package {zip_filename} corrigé...**")
+                self.send_message(chat_id, f"❌ Fichier {zip_filename} non trouvé!")
+                return
             
             # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
@@ -150,14 +141,14 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **{zip_filename} - Nouveau Package Hyper Intelligent 2026**\n\n✅ Version: Hyper Intelligent 2026\n✅ Cooldown INTER: 30min\n✅ Auto-Restart: Après Bilan\n✅ Bilan Auto: Fixé (6h, 12h, 18h, 0h)\n\n🎯 **Version du 01/01/2026**\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229',
+                    'caption': f'📦 **appo.zip - Package Complet Bot ENSEIGNE v5.3**\n\n✅ Fichier: appo.zip\n✅ Port : 10000 (Render)\n✅ Tous les fichiers inclus\n✅ **{data_count} jeux collectés**\n✅ **{rules_count} règles INTER**\n✅ Sessions: 1-6h, 9-12h, 15-18h, 21-24h\n✅ Rapports automatiques: 6h, 12h, 18h, 00h\n✅ Quarantaine intelligente: ❌ ET ✅2️⃣\n✅ Vérification: PREMIÈRE carte uniquement\n✅ Reset quotidien: 00h59 (Bénin TZ)\n✅ Modes INTER/STATIQUE exclusifs\n\n**Déploiement Render.com:**\n1. Extraire appo.zip\n2. Configurer: BOT_TOKEN, WEBHOOK_URL\n3. Lancer: `gunicorn main:app --bind 0.0.0.0:10000`\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229\n🇧🇯 Timezone: Africa/Porto-Novo',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
             
             if response.json().get('ok'):
-                logger.info(f"✅ {zip_filename} envoyé avec succès")
-                self.send_message(chat_id, f"✅ **pack.zip envoyé avec succès!**\n\n🎯 Le bot est maintenant à jour avec les dernières corrections:\n• Relance ❌ avec même costume\n• Vérification du délai N+2\n• Rapports auto à 6h, 12h, 18h, 0h")
+                logger.info(f"✅ appo.zip envoyé avec succès")
+                self.send_message(chat_id, f"✅ **{zip_filename} envoyé avec succès!**\n\n🎯 v5.3 FINAL - Bot entièrement vérifié et prêt pour production 🚀")
             else:
                 self.send_message(chat_id, f"❌ Erreur : {response.text}")
                     
@@ -231,171 +222,30 @@ class TelegramHandlers:
         
         self.send_message(chat_id, message, reply_markup=keyboard)
 
-    # --- GESTION COMMANDE /bilan (APERÇU DU RAPPORT) ---
-    def _handle_command_bilan(self, chat_id: int):
-        """Affiche un aperçu du bilan de fin de session."""
-        if not self.card_predictor:
-            self.send_message(chat_id, "❌ Le moteur de prédiction n'est pas chargé.")
-            return
-        
-        try:
-            msg = self.card_predictor.get_session_report_preview()
-            self.send_message(chat_id, msg)
-        except Exception as e:
-            logger.error(f"❌ Erreur aperçu bilan: {e}")
-            self.send_message(chat_id, "❌ Erreur lors du calcul du bilan.")
-    
-    # --- GESTION COMMANDE /qua (QUARANTAINE) ---
-    def _handle_command_qua(self, chat_id: int):
-        """Affiche l'état et les informations secrètes du bot."""
-        if not self.card_predictor:
-            self.send_message(chat_id, "❌ Le moteur de prédiction n'est pas chargé.")
-            return
-        
-        try:
-            cp = self.card_predictor
-            now = cp.now()
-            
-            message = "🔒 ÉTAT ET INFORMATIQUE SECRET DU BOT\n\n"
-            
-            # TOP en quarantaine
-            qua_list = cp.quarantined_rules if cp.quarantined_rules else {}
-            if qua_list:
-                message += "🔒 TOP EN QUARANTAINE:\n"
-                for key in qua_list.keys():
-                    try:
-                        trigger, suit = key.split("_", 1)
-                        message += f"  • {trigger} → {suit}\n"
-                    except:
-                        message += f"  • {key}\n"
-                message += "\n"
-            else:
-                message += "✅ Aucun TOP en quarantaine\n\n"
-            
-            # Les 5 dernières prédictions
-            recent_preds = sorted(
-                [(k, v) for k, v in cp.predictions.items() if v.get('timestamp')],
-                key=lambda x: x[1].get('timestamp', 0),
-                reverse=True
-            )[:5]
-            
-            message += "📊 Les 5 dernières prédictions envoyées\n"
-            if recent_preds:
-                for game_num, pred in recent_preds:
-                    trigger = pred.get('predicted_from_trigger', '?')
-                    suit = pred.get('predicted_costume', '?')
-                    status = pred.get('status', 'pending')
-                    is_inter = "🧠 INTER" if pred.get('is_inter') else "📋 STATIQUE"
-                    status_display = {
-                        'pending': '⏳',
-                        'won': '✅',
-                        'lost': '❌'
-                    }.get(status, '?')
-                    message += f"  • Jeu {game_num}: {suit} ({status_display}) - Déclencheur: {trigger} [{is_inter}]\n"
-            else:
-                message += "  Aucune prédiction\n"
-            message += "\n"
-            
-            # Prochain bilan
-            next_report_hour = None
-            report_hours = [6, 12, 18, 0]
-            for h in report_hours:
-                if h > now.hour:
-                    next_report_hour = h
-                    break
-            if next_report_hour is None:
-                next_report_hour = report_hours[0]
-            minutes_until = ((next_report_hour - now.hour) * 60 - now.minute) % (24 * 60)
-            hours = minutes_until // 60
-            mins = minutes_until % 60
-            message += f"⏰ Prochain bilan dans: {hours}h{mins:02d}\n\n"
-            
-            # Mode INTER
-            message += f"🧠 Mode INTER: {'✅ ACTIF' if cp.is_inter_mode_active else '❌ INACTIF'}\n\n"
-            
-            # Données collectées
-            message += f"📈 Donnees collectees: {len(cp.inter_data)} jeux\n"
-            
-            # Règles INTER complètes
-            if cp.smart_rules:
-                message += "📋 Regles UTILISER INTELLIGENT :\n\n"
-                rules_by_suit = defaultdict(list)
-                for rule in cp.smart_rules:
-                    rules_by_suit[rule.get('predict', rule.get('result_suit'))].append(rule)
-                
-                for suit in ['♠️', '❤️', '♦️', '♣️']:
-                    if suit in rules_by_suit:
-                        message += f"Pour predire {suit}:\n"
-                        for rule in rules_by_suit[suit]:
-                            trigger = rule.get('trigger', '?')
-                            count = rule.get('count', 0)
-                            message += f"  • {trigger} ({count}x)\n"
-                        message += "\n"
-            else:
-                message += "📋 Pas encore de regles INTER\n"
-            
-            self.send_message(chat_id, message)
-        except Exception as e:
-            logger.error(f"Erreur /qua : {e}")
-            self.send_message(chat_id, f"❌ Erreur : {str(e)}")
-
     # --- GESTION COMMANDE /reset ---
     def _handle_command_reset(self, chat_id: int):
-        """⚠️ RÉINITIALISE COMPLÈTEMENT LE BOT - efface TOUT sauf les IDs des canaux."""
+        """Réinitialise les prédictions automatiques (non-INTER) manuellement."""
         if not self.card_predictor:
             self.send_message(chat_id, "❌ Le moteur de prédiction n'est pas chargé.")
             return
         
         try:
-            cp = self.card_predictor
+            result = self.card_predictor.reset_automatic_predictions()
             
-            saved_target_id = cp.target_channel_id
-            saved_pred_id = cp.prediction_channel_id
-            
-            # Compter avant suppression
-            pred_count = len(cp.predictions)
-            inter_count = len(cp.inter_data)
-            rules_count = len(cp.smart_rules)
-            qua_count = len(cp.quarantined_rules)
-            games_count = len(cp.collected_games)
-            
-            # Réinitialiser COMPLÈTEMENT
-            cp.predictions = {}
-            cp.inter_data = []
-            cp.smart_rules = []
-            cp.collected_games = set()
-            cp.sequential_history = {}
-            cp.quarantined_rules = {}
-            cp.pending_edits = {}
-            cp.last_report_sent = {}
-            cp.last_prediction_time = 0
-            cp.last_predicted_game_number = 0
-            cp.consecutive_fails = 0
-            cp.last_analysis_time = 0
-            cp.single_trigger_until = 0
-            cp.wait_until_next_update = 0
-            cp.target_channel_id = saved_target_id
-            cp.prediction_channel_id = saved_pred_id
-            cp.is_inter_mode_active = False
-            cp._save_all_data()
-            
-            message = (f"✅ RÉINITIALISATION COMPLÈTE\n\n"
-                       f"📋 DONNÉES SUPPRIMÉES:\n"
-                       f"  • {pred_count} prédictions\n"
-                       f"  • {inter_count} jeux collectés\n"
-                       f"  • {rules_count} règles TOP 2\n"
-                       f"  • {qua_count} TOP en quarantaine\n"
-                       f"  • {games_count} jeux dans collections\n"
-                       f"  • historique_sequentiel.json\n"
-                       f"  • pending_edits.json\n\n"
-                       f"✅ DONNÉES CONSERVÉES:\n"
-                       f"  • Canal Source: {saved_target_id}\n"
-                       f"  • Canal Prédiction: {saved_pred_id}\n\n"
-                       f"Mode INTER: DÉSACTIVÉ ❌\n"
-                       f"Bot: VIERGE ET PRÊT 🎯")
+            message = f"""🔄 **RÉINITIALISATION EFFECTUÉE**
+
+📊 **Résultat :**
+• {result['removed']} prédictions automatiques supprimées
+• {result['kept_inter']} prédictions INTER conservées
+
+✅ **Données NON modifiées :**
+• collected_games.json (données collectées)
+• inter_data.json (règles intelligentes)
+• smart_rules.json (Top 2 par enseigne)
+
+Le bot est prêt pour de nouvelles prédictions."""
             
             self.send_message(chat_id, message)
-            logger.info("🔄 Reset complet effectué")
         except Exception as e:
             logger.error(f"Erreur /reset : {e}")
             self.send_message(chat_id, f"❌ Erreur lors de la réinitialisation: {e}")
@@ -490,12 +340,8 @@ class TelegramHandlers:
                     self._handle_command_deploy(chat_id)
                 elif text.startswith('/collect'):
                     self._handle_command_collect(chat_id)
-                elif text.startswith('/qua'):
-                    self._handle_command_qua(chat_id)
                 elif text.startswith('/reset'):
                     self._handle_command_reset(chat_id)
-                elif text.startswith('/bilan'):
-                    self._handle_command_bilan(chat_id)
                 
                 # Traitement Canal Source
                 elif str(chat_id) == str(self.card_predictor.target_channel_id):
@@ -513,7 +359,7 @@ class TelegramHandlers:
                             mid_to_edit = res.get('message_id_to_edit')
                             pred_channel = self.card_predictor.prediction_channel_id
                             
-                            if mid_to_edit and pred_channel:
+                            if mid_to_edit and pred_channel: 
                                 self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
                     
                     # C. Prédire (même sur messages temporaires ⏰)
@@ -524,8 +370,7 @@ class TelegramHandlers:
                         if pred_channel:
                             mid = self.send_message(pred_channel, txt)
                             if mid:
-                                trigger = self.card_predictor._last_trigger_used or '?'  # ✅ Assurer str, jamais None
-                                self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter or False, trigger_used=trigger)
+                                self.card_predictor.make_prediction(num, val, mid, is_inter=is_inter or False)
 
             # 2. Messages édités (CRITIQUE pour vérification)
             elif ('edited_message' in update and 'text' in update['edited_message']) or ('edited_channel_post' in update and 'text' in update['edited_channel_post']):
