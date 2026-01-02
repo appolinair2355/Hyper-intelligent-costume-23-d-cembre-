@@ -94,6 +94,9 @@ class CardPredictor:
         self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
         self.last_report_sent = self._load_data('last_report_sent.json')
         
+        # 🔥 SUIVI D'UTILISATIONS POUR CYCLE 2 UTILISATIONS
+        self.trigger_usage_tracker = self._load_data('trigger_usage_tracker.json') or {}
+        
         if self.is_inter_mode_active is None:
             self.is_inter_mode_active = True
         
@@ -105,34 +108,59 @@ class CardPredictor:
     # --- Persistance ---
     def _load_data(self, filename: str, is_set: bool = False, is_scalar: bool = False) -> Any:
         try:
-            is_dict = filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
+            # Détection des types de fichiers
+            is_dict = filename in [
+                'channels_config.json', 'predictions.json', 
+                'sequential_history.json', 'smart_rules.json', 
+                'pending_edits.json', 'trigger_usage_tracker.json'
+            ]
             
             if not os.path.exists(filename):
                 return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+            
             with open(filename, 'r') as f:
                 content = f.read().strip()
-                if not content: return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                if not content: 
+                    return set() if is_set else (None if is_scalar else ({} if is_dict else []))
+                
                 data = json.loads(content)
-                if is_set: return set(data)
-                if filename in ['sequential_history.json', 'predictions.json', 'pending_edits.json'] and isinstance(data, dict): 
+                if is_set: 
+                    return set(data)
+                
+                # Conversion des clés en entiers si nécessaire
+                if filename in [
+                    'sequential_history.json', 'predictions.json', 
+                    'pending_edits.json', 'trigger_usage_tracker.json'
+                ] and isinstance(data, dict): 
                     return {int(k): v for k, v in data.items()}
+                
                 return data
         except Exception as e:
             logger.error(f"⚠️ Erreur chargement {filename}: {e}")
-            is_dict = filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
+            is_dict = filename in [
+                'channels_config.json', 'predictions.json', 
+                'sequential_history.json', 'smart_rules.json', 
+                'pending_edits.json', 'trigger_usage_tracker.json'
+            ]
             return set() if is_set else (None if is_scalar else ({} if is_dict else []))
 
     def _save_data(self, data: Any, filename: str):
         try:
-            if isinstance(data, set): data = list(data)
+            # Conversion des sets en listes
+            if isinstance(data, set): 
+                data = list(data)
+            
+            # Conversion des IDs de canal en entiers
             if filename == 'channels_config.json' and isinstance(data, dict):
                 if 'target_channel_id' in data and data['target_channel_id'] is not None:
                     data['target_channel_id'] = int(data['target_channel_id'])
                 if 'prediction_channel_id' in data and data['prediction_channel_id'] is not None:
                     data['prediction_channel_id'] = int(data['prediction_channel_id'])
             
-            with open(filename, 'w') as f: json.dump(data, f, indent=4)
-        except Exception as e: logger.error(f"❌ Erreur sauvegarde {filename}: {e}")
+            with open(filename, 'w') as f: 
+                json.dump(data, f, indent=4)
+        except Exception as e: 
+            logger.error(f"❌ Erreur sauvegarde {filename}: {e}")
 
     def _save_all_data(self):
         self._save_data(self.predictions, 'predictions.json')
@@ -153,6 +181,7 @@ class CardPredictor:
         self._save_data(self.wait_until_next_update, 'wait_until_next_update.json')
         self._save_data(self.last_inter_update_time, 'last_inter_update.json')
         self._save_data(self.last_report_sent, 'last_report_sent.json')
+        self._save_data(self.trigger_usage_tracker, 'trigger_usage_tracker.json')
 
     # ======== TEMPS & SESSIONS ========
     def now(self):
@@ -179,32 +208,36 @@ class CardPredictor:
         now = self.now()
         key_date = now.strftime("%Y-%m-%d")
         
-        # ✅ CORRECTION: Heures de FIN réelle de session (après résultats)
-        # Sessions: 1-6h, 9-12h, 15-18h, 21-24h
-        # Rapports: 6h00, 12h00, 18h00, 00h00 (Synchronisé avec le scheduler)
-        report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
-        report_minutes = {6: 0, 12: 0, 18: 0, 0: 0}
+        # ✅ CORRECTION: Heures de FIN réelle de session
+        report_hours = {
+            6: ("01h00", "06h00"), 
+            12: ("09h00", "12h00"), 
+            18: ("15h00", "18h00"), 
+            0: ("21h00", "00h00")
+        }
         
         # Vérifier si c'est une heure de rapport
         if now.hour not in report_hours:
+            logger.debug(f"⏭️ Heure {now.hour}h n'est pas une heure de rapport")
             return
         
-        # S'envoyer à l'heure pile (marge de 5 minutes)
-        minute_offset = report_minutes.get(now.hour, 0)
-        if now.minute < minute_offset or now.minute > minute_offset + 5:
+        # 🎯 S'envoyer à l'heure pile avec marge de 5 minutes
+        if now.minute > 5:
+            logger.debug(f"⏭️ Minute {now.minute} hors fenêtre [0-5] pour heure {now.hour}h")
             return
         
         key = f"{key_date}_{now.hour}"
         
         # Éviter d'envoyer deux fois
         if self.last_report_sent.get(key):
+            logger.info(f"📊 Rapport {key} déjà envoyé")
             return
         
         logger.info(f"📊 Envoi rapport de session à {now.hour}h...")
         
         start, end = report_hours[now.hour]
         
-        # Compter les prédictions complétées (won ou lost)
+        # Compter les prédictions complétées
         session_predictions = {}
         for game_num, pred in self.predictions.items():
             status = pred.get('status')
@@ -253,7 +286,12 @@ class CardPredictor:
     def get_session_report_preview(self):
         """Retourne un aperçu du rapport de fin de session avec le temps restant."""
         now = self.now()
-        report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
+        report_hours = {
+            6: ("01h00", "06h00"), 
+            12: ("09h00", "12h00"), 
+            18: ("15h00", "18h00"), 
+            0: ("21h00", "00h00")
+        }
         
         # Trouver la prochaine heure de rapport
         next_report_hour = None
@@ -349,7 +387,7 @@ class CardPredictor:
             count_1 = self._count_cards_in_content(content_1)
             count_2 = self._count_cards_in_content(content_2)
 
-            # Formats acceptés: 3/2, 3/3, 2/3 (3 cartes dans le premier groupe sont supportées)
+            # Formats acceptés: 3/2, 3/3, 2/3
             if (count_1 == 3 and count_2 == 2) or \
                (count_1 == 3 and count_2 == 3) or \
                (count_1 == 2 and count_2 == 3):
@@ -436,6 +474,7 @@ class CardPredictor:
             })
             logger.info(f"🧠 Jeu {game_number} collecté pour INTER: {trigger_card} -> {result_suit_normalized}")
 
+        # Nettoyage des anciennes données
         limit = game_number - 50
         self.sequential_history = {k:v for k,v in self.sequential_history.items() if k >= limit}
         self.collected_games = {g for g in self.collected_games if g >= limit}
@@ -445,44 +484,63 @@ class CardPredictor:
     
     def analyze_and_set_smart_rules(self, chat_id: Optional[int] = None, initial_load: bool = False, force_activate: bool = False):
         """
-        Analyse les données pour trouver les Top 3 déclencheurs par ENSEIGNE DE RÉSULTAT.
-        Crée des règles même avec peu de données (minimum 1 occurrence).
+        Analyse les données pour trouver les Top 4 déclencheurs par ENSEIGNE DE RÉSULTAT.
+        ✅ Réinitialise les compteurs pour TOUS les déclencheurs qui reviennent dans les TOP.
         """
-        # Grouper par enseigne de RÉSULTAT (♠️, ♥️, ♦️, ♣️)
+        # Grouper par enseigne de RÉSULTAT
         result_suit_groups = defaultdict(lambda: defaultdict(int))
-        
         for entry in self.inter_data:
-            trigger_card = entry['declencheur']  # Ex: 6♦️
-            result_suit = entry['result_suit']   # Ex: ♣️
+            trigger_card = entry['declencheur']
+            result_suit = entry['result_suit']
             result_suit_groups[result_suit][trigger_card] += 1
         
         self.smart_rules = []
+        current_top_triggers = set()  # Déclencheurs dans les nouveaux TOP
         
-        # Pour chaque enseigne de résultat (♠️, ♥️, ♦️, ♣️)
+        # Pour chaque enseigne de résultat
         for result_suit in ['♠️', '♥️', '♦️', '♣️']:
-            result_normalized = "❤️" if result_suit == "♥️" else result_suit
-            
             triggers_for_this_suit = result_suit_groups.get(result_suit, {})
-            
             if not triggers_for_this_suit:
                 continue
             
-            # Trier par fréquence et prendre jusqu'à 3 meilleurs (même avec 1 seule occurrence)
+            # Trier par fréquence et prendre les 4 meilleurs
             top_triggers = sorted(
                 triggers_for_this_suit.items(), 
                 key=lambda x: x[1], 
                 reverse=True
-            )[:3]
+            )[:4]
             
             for trigger_card, count in top_triggers:
+                result_normalized = "❤️" if result_suit == "♥️" else result_suit
                 self.smart_rules.append({
                     'trigger': trigger_card,
                     'predict': result_normalized,
                     'count': count,
                     'result_suit': result_normalized
                 })
+                current_top_triggers.add(trigger_card)
         
-        # Activer le mode INTER si on a au moins 1 règle
+        # 🎯 PHASE CRITIQUE : Réinitialisation des compteurs
+        reset_count = 0
+        for trigger in current_top_triggers:
+            # ✅ Réinitialiser le compteur à 0 pour chaque déclencheur dans les TOP
+            self.trigger_usage_tracker[trigger] = {
+                'uses': 0,
+                'last_reset': time.time(),
+                'total_uses': self.trigger_usage_tracker.get(trigger, {}).get('total_uses', 0)
+            }
+            reset_count += 1
+            logger.info(f"🔄 Compteur reset pour {trigger} (retour dans les TOP)")
+        
+        # 🗑️ Nettoyer les déclencheurs qui ne sont plus dans les TOP
+        triggers_to_remove = set(self.trigger_usage_tracker.keys()) - current_top_triggers
+        for trigger in triggers_to_remove:
+            del self.trigger_usage_tracker[trigger]
+            logger.info(f"🗑️ Déclencheur {trigger} retiré du tracker")
+        
+        logger.info(f"🎯 {len(current_top_triggers)} déclencheurs en cycle, {reset_count} réinitialisés")
+        
+        # Activation du mode INTER
         if force_activate:
             self.is_inter_mode_active = True
             if chat_id: self.active_admin_chat_id = chat_id
@@ -490,21 +548,19 @@ class CardPredictor:
             self.is_inter_mode_active = True
         elif not initial_load:
             self.is_inter_mode_active = False
-            
-        self.last_analysis_time = time.time()
-        self._save_all_data()
-
-        logger.info(f"🧠 Analyse terminée. Règles trouvées: {len(self.smart_rules)}. Mode actif: {self.is_inter_mode_active}")
         
-        # Notification si demandée
+        self.last_analysis_time = time.time()
+        self.last_inter_update_time = time.time()
+        self._save_all_data()
+        
+        logger.info(f"🧠 Analyse terminée. {len(self.smart_rules)} règles. Mode: {self.is_inter_mode_active}")
+        
+        # Notification
         if chat_id is not None and self.telegram_message_sender:
-            if self.smart_rules:
-                msg = f"✅ **Analyse terminée !**\n\n{len(self.smart_rules)} règles créées à partir de {len(self.inter_data)} jeux collectés.\n\n🧠 **Mode INTER activé automatiquement**"
-            else:
-                msg = f"⚠️ **Pas assez de données**\n\n{len(self.inter_data)} jeux collectés. Continuez à jouer pour créer des règles."
+            msg = f"✅ Analyse terminée !\n{len(self.smart_rules)} règles créées.\n🔄 Compteurs reset (cycle 2 utilisations)"
             self.telegram_message_sender(chat_id, msg)
         
-        # SORTIE DE QUARANTAINE (après analyse)
+        # Sortie de quarantaine
         for key in list(self.quarantined_rules.keys()):
             try:
                 trigger, suit = key.split("_", 1)
@@ -568,7 +624,7 @@ class CardPredictor:
                 rules_by_result[rule['result_suit']].append(rule)
             
             message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
-            message += f"📊 **{len(self.smart_rules)} règles** créées ({data_count} jeux analysés):\n\n"
+            message += f"📊 **{len(self.smart_rules)} règles** créées ({data_count} jeux analysés) - **TOP 4 par enseigne**:\n\n"
             
             for suit in ['♠️', '❤️', '♦️', '♣️']:
                 if suit in rules_by_result:
@@ -616,7 +672,6 @@ class CardPredictor:
         
         self.wait_until_next_update = time.time() + 1800
         self._save_all_data()
-
 
     # --- CŒUR DU SYSTÈME : PRÉDICTION ---
     
@@ -666,50 +721,60 @@ class CardPredictor:
 
         logger.info(f"🎮 Jeu source: {game_number} → Cartes 1er groupe: {cards}")
 
-        predicted_suit = None
-        trigger_used = None
-        is_inter_prediction = False
-        rule_index = 0
-
-        # ======= MODE INTER : PRIORITÉ ABSOLUE (TOP 3 UNIQUEMENT) =======
+        # ======= MODE INTER : PRIORITÉ ABSOLUE (TOP 4 avec cycle) =======
         if self.is_inter_mode_active and self.smart_rules:
             rules_by_suit = defaultdict(list)
             for rule in self.smart_rules:
                 rules_by_suit[rule['predict']].append(rule)
-
-            # Chercher dans les 3 TOP de chaque couleur
+            
+            predicted_suit = None
+            trigger_used = None
+            is_inter_prediction = False
+            rule_index = 0
+            
+            # Chercher dans les 4 premiers déclencheurs de chaque couleur
             for suit in ['♠️', '❤️', '♦️', '♣️']:
-                suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
-                top3 = suit_rules[:3]  # <-- TOP 3
-
-                for idx, rule in enumerate(top3):
-                    # ✅ Vérifier si le déclencheur est dans le 1er groupe
-                    if rule['trigger'] in cards:
-                        key = f"{rule['trigger']}_{rule['predict']}"
-                        
-                        # Vérifier quarantaine
-                        if key in self.quarantined_rules:
-                            qua_data = self.quarantined_rules[key]
-                            if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
-                                logger.debug(f"🔒 Règle en quarantaine: {key}")
-                                continue
-                            elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
-                                logger.debug(f"🔒 Règle en quarantaine: {key}")
-                                continue
-
-                        predicted_suit = rule['predict']
-                        trigger_used = rule['trigger']
-                        is_inter_prediction = True
-                        rule_index = idx + 1  # 1, 2 ou 3
-                        logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit}")
-                        break
+                suit_rules = sorted(
+                    rules_by_suit.get(suit, []), 
+                    key=lambda x: x.get('count', 0), 
+                    reverse=True
+                )
+                
+                # 🎯 Parcourir les TOP 4
+                for idx in range(min(4, len(suit_rules))):
+                    rule = suit_rules[idx]
+                    trigger = rule['trigger']
+                    
+                    # 🔍 Vérifier si le déclencheur a déjà été utilisé 2 fois
+                    tracker = self.trigger_usage_tracker.get(trigger, {'uses': 0})
+                    if tracker['uses'] >= 2:
+                        logger.debug(f"⚠️ Déclencheur {trigger} déjà utilisé 2x, passage au suivant")
+                        continue
+                    
+                    # Vérifier quarantaine
+                    key = f"{trigger}_{rule['predict']}"
+                    if key in self.quarantined_rules:
+                        qua_data = self.quarantined_rules[key]
+                        if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
+                            logger.debug(f"🔒 Règle en quarantaine: {key}")
+                            continue
+                        elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
+                            logger.debug(f"🔒 Règle en quarantaine: {key}")
+                            continue
+                    
+                    # ✅ UTILISER ce déclencheur
+                    predicted_suit = rule['predict']
+                    trigger_used = trigger
+                    is_inter_prediction = True
+                    rule_index = idx + 1
+                    logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit} (utilisations: {tracker['uses']}/2)")
+                    break
                 
                 if predicted_suit:
                     break
-
-            # ✅ Si MODE INTER actif et pas de match → PAS DE PRÉDICTION (pas de fallback statique)
+            
             if not predicted_suit:
-                logger.debug("⚠️ MODE INTER actif: Aucune règle TOP3 ne match dans le 1er groupe")
+                logger.debug("⚠️ MODE INTER: Aucun déclencheur disponible (tous à 2 utilisations)")
                 return False, None, None, None
 
         # ======= MODE STATIQUE : UTILISÉ UNIQUEMENT SI INTER EST INACTIF =======
@@ -737,7 +802,7 @@ class CardPredictor:
                 logger.debug(f"⚠️ MODE STATIQUE: Carte {first_card} non trouvée dans règles ou 1er groupe")
                 return False, None, None, None
 
-        # ✅ Si une prédiction est trouvée (INTER ou STATIQUE), vérifier cooldown et lancer
+        # ✅ Vérifier cooldown et lancer
         if predicted_suit:
             if self.last_prediction_time and time.time() < self.last_prediction_time + self.prediction_cooldown:
                 logger.debug("⏸️ Cooldown prédiction actif")
@@ -819,21 +884,20 @@ class CardPredictor:
 
             logger.info(f"🎯 Vérification prédiction pour jeu {predicted_game} (costume: {predicted_costume}) avec message reçu jeu {game_number}")
 
-            # Vérifier séquentiellement : game_number prédit, +1, +2
+            # Vérifier séquentiellement
             verification_found = False
             
             for offset in [0, 1, 2]:
                 check_game_number = predicted_game + offset
                 
                 if game_number == check_game_number:
-                    # Le game_number actuel correspond à predicted_game + offset
                     costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
                     
                     if costume_found:
                         # Succès
                         status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
                         updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-
+                        
                         prediction['status'] = 'won'
                         prediction['verification_count'] = offset
                         prediction['final_message'] = updated_message
@@ -850,21 +914,20 @@ class CardPredictor:
                         logger.info(f"✅ Succès offset {offset} pour jeu {predicted_game}")
                         break
                     else:
-                        # Costume non trouvé à cet offset
+                        # Échec au dernier offset
                         if offset == 2:
-                            # ✅ Échec au dernier offset (N+2)
                             status_symbol = "❌"
                             updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
                             
                             prediction['status'] = 'lost'
                             prediction['final_message'] = updated_message
                             
-                            # Appliquer quarantaine si INTER
+                            # Quarantaine si INTER
                             if prediction.get('is_inter'):
                                 self._apply_quarantine(prediction)
                                 logger.info(f"❌ Échec INTER au jeu {game_number}: Quarantaine appliquée")
                             
-                            # ✅ Relance auto pour TOUS les ❌
+                            # Relance auto
                             next_bet_game = game_number + 1
                             logger.info(f"🔄 Statut ❌ détecté pour Jeu {predicted_game}. Relance automatique pour Jeu {next_bet_game}")
                             
@@ -901,8 +964,7 @@ class CardPredictor:
                             logger.info(f"❌ Échec offset {offset} pour jeu {predicted_game}")
                             break
             
-                
-            # ✅ Vérifier si on a dépassé le délai (game_number > predicted_game + 2)
+            # Vérifier délai dépassé
             if game_number > predicted_game + 2:
                 logger.warning(f"⏰ Délai dépassé pour jeu {predicted_game}. Message reçu pour {game_number} > {predicted_game + 2}")
                 
@@ -912,7 +974,7 @@ class CardPredictor:
                 prediction['status'] = 'lost'
                 prediction['final_message'] = updated_message
                 
-                # Appliquer quarantaine si INTER
+                # Quarantaine si INTER
                 if prediction.get('is_inter'):
                     self._apply_quarantine(prediction)
                     logger.info(f"❌ Échec INTER (délai dépassé) au jeu {game_number}: Quarantaine appliquée")
@@ -953,7 +1015,7 @@ class CardPredictor:
                 verification_found = True
                 break
             
-            # Si la vérification est résolue, on sort de la boucle
+            # Sortir si vérification résolue
             if verification_found:
                 break
         
@@ -967,6 +1029,12 @@ class CardPredictor:
         # Obtenir le déclencheur utilisé (priorité au paramètre, puis au stockage, puis par défaut '?')
         if not trigger_used:
             trigger_used = self._last_trigger_used or '?'
+        
+        # ✅ INCRÉMENTER le compteur d'utilisations
+        if is_inter and trigger_used != '?' and trigger_used in self.trigger_usage_tracker:
+            self.trigger_usage_tracker[trigger_used]['uses'] += 1
+            self.trigger_usage_tracker[trigger_used]['total_uses'] += 1
+            logger.info(f"📊 Déclencheur {trigger_used}: {self.trigger_usage_tracker[trigger_used]['uses']}/2 (total: {self.trigger_usage_tracker[trigger_used]['total_uses']})")
         
         self.predictions[target] = {
             'predicted_costume': suit, 
