@@ -25,6 +25,8 @@ user_message_counts = defaultdict(list)
 WELCOME_MESSAGE = """
 👋 **BIENVENUE SUR LE BOT ENSEIGNE !** ♠️♥️♦️♣️
 
+🚀 **version : hyper intelligent 2026 est activé**
+
 Je prédis la prochaine Enseigne (Couleur) en utilisant :
 1. **Règles statiques** : Patterns prédéfinis (ex: 10♦️ → ♠️)
 2. **Intelligence artificielle (Mode INTER)** : Apprend des données réelles
@@ -123,22 +125,20 @@ class TelegramHandlers:
     # --- GESTION COMMANDE /deploy ---
     def _handle_command_deploy(self, chat_id: int):
         try:
-            # On utilise pack.zip comme fichier de déploiement principal
-            zip_filename = 'pack.zip'
+            # On utilise hooo.zip comme fichier de déploiement principal
+            zip_filename = 'hooo.zip'
             
             import os
             
             if not os.path.exists(zip_filename):
-                # Fallback sur les anciens noms pour compatibilité
-                for fallback in ['yoi.zip', 'appo.zip']:
-                    if os.path.exists(fallback):
-                        zip_filename = fallback
-                        break
+                # Fallback sur pack.zip
+                if os.path.exists('pack.zip'):
+                    zip_filename = 'pack.zip'
                 else:
-                    self.send_message(chat_id, "❌ Fichier de déploiement (pack.zip) non trouvé!")
+                    self.send_message(chat_id, "❌ Fichier de déploiement (hooo.zip) non trouvé!")
                     return
 
-            self.send_message(chat_id, f"📦 **Envoi du nouveau package pack.zip corrigé...**")
+            self.send_message(chat_id, f"📦 **Envoi du nouveau package {zip_filename} corrigé...**")
             
             # Envoyer le fichier
             url = f"{self.base_url}/sendDocument"
@@ -150,7 +150,7 @@ class TelegramHandlers:
                 
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **pack.zip - Nouveau Package Corrigé**\n\n✅ Fichier: pack.zip\n✅ Bilan Auto: Fixé (6h, 12h, 18h, 0h)\n✅ Relance ❌: Fixée (Jeu N+1 avec même costume)\n✅ Vérification: Optimisée\n✅ Port : 10000 (Render.com)\n✅ Délai dépassé: Détecté (N+2)\n\n🎯 **Version du 29/12/2025 - Corrections Finales**\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229',
+                    'caption': f'📦 **{zip_filename} - Nouveau Package Hyper Intelligent 2026**\n\n✅ Version: Hyper Intelligent 2026\n✅ Cooldown INTER: 30min\n✅ Auto-Restart: Après Bilan\n✅ Bilan Auto: Fixé (6h, 12h, 18h, 0h)\n\n🎯 **Version du 01/01/2026**\n\n👨‍💻 Développeur: Sossou Kouamé\n🎟️ Code Promo: Koua229',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
@@ -513,7 +513,7 @@ class TelegramHandlers:
                             mid_to_edit = res.get('message_id_to_edit')
                             pred_channel = self.card_predictor.prediction_channel_id
                             
-                            if mid_to_edit and pred_channel: 
+                            if mid_to_edit and pred_channel:
                                 self.send_message(pred_channel, res['new_message'], message_id=mid_to_edit, edit=True)
                     
                     # C. Prédire (même sur messages temporaires ⏰)

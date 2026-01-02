@@ -32,10 +32,11 @@ SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
 
 # Sessions de prédictions
 PREDICTION_SESSIONS = [
-    (1, 6),
-    (9, 12),
-    (15, 18),
-    (21, 24)
+    (2, 6),
+    (10, 12),
+    (15, 17),
+    (20, 23),
+    (0, 1)
 ]
 
 class CardPredictor:
@@ -93,6 +94,11 @@ class CardPredictor:
         self.wait_until_next_update = self._load_data('wait_until_next_update.json', is_scalar=True) or 0
         self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
         self.last_report_sent = self._load_data('last_report_sent.json')
+        self.used_inter_rules = self._load_data('used_inter_rules.json') # Tracking des règles utilisées
+        
+        # Tracking du temps d'utilisation des règles INTER (Cooldown 30 min)
+        # Structure: {rule_key: last_used_timestamp}
+        self.inter_rules_last_used = self._load_data('inter_rules_last_used.json') or {}
         
         if self.is_inter_mode_active is None:
             self.is_inter_mode_active = True
@@ -153,6 +159,8 @@ class CardPredictor:
         self._save_data(self.wait_until_next_update, 'wait_until_next_update.json')
         self._save_data(self.last_inter_update_time, 'last_inter_update.json')
         self._save_data(self.last_report_sent, 'last_report_sent.json')
+        self._save_data(self.used_inter_rules, 'used_inter_rules.json')
+        self._save_data(self.inter_rules_last_used, 'inter_rules_last_used.json')
 
     # ======== TEMPS & SESSIONS ========
     def now(self):
@@ -179,28 +187,23 @@ class CardPredictor:
         now = self.now()
         key_date = now.strftime("%Y-%m-%d")
         
-        # ✅ CORRECTION: Heures de FIN réelle de session (après résultats)
-        # Sessions: 1-6h, 9-12h, 15-18h, 21-24h
-        # Rapports: 6h00, 12h00, 18h00, 00h00 (Synchronisé avec le scheduler)
-        report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
-        report_minutes = {6: 0, 12: 0, 18: 0, 0: 0}
+        # ✅ NOUVELLES HEURES DE FIN DE SESSION
+        # Sessions: 2-6h, 10-12h, 15-17h, 20-23h, 0-0h59
+        report_hours = {6: ("02h00", "06h00"), 12: ("10h00", "12h00"), 17: ("15h00", "17h00"), 23: ("20h00", "23h00"), 1: ("00h00", "00h59")}
         
         # Vérifier si c'est une heure de rapport
         if now.hour not in report_hours:
-            return
-        
-        # S'envoyer à l'heure pile (marge de 5 minutes)
-        minute_offset = report_minutes.get(now.hour, 0)
-        if now.minute < minute_offset or now.minute > minute_offset + 5:
+            logger.debug(f"ℹ️ Pas une heure de rapport ({now.hour}h)")
             return
         
         key = f"{key_date}_{now.hour}"
         
-        # Éviter d'envoyer deux fois
+        # Éviter d'envoyer deux fois (sauf si on vient de redémarrer et que le fichier est perdu, ce qui est ok)
         if self.last_report_sent.get(key):
+            logger.debug(f"ℹ️ Rapport {key} déjà envoyé.")
             return
         
-        logger.info(f"📊 Envoi rapport de session à {now.hour}h...")
+        logger.info(f"📊 Génération du rapport de session pour {now.hour}h...")
         
         start, end = report_hours[now.hour]
         
@@ -467,12 +470,12 @@ class CardPredictor:
             if not triggers_for_this_suit:
                 continue
             
-            # Trier par fréquence et prendre jusqu'à 3 meilleurs (même avec 1 seule occurrence)
+            # Trier par fréquence et prendre jusqu'à 4 meilleurs (même avec 1 seule occurrence)
             top_triggers = sorted(
                 triggers_for_this_suit.items(), 
                 key=lambda x: x[1], 
                 reverse=True
-            )[:3]
+            )[:4]
             
             for trigger_card, count in top_triggers:
                 self.smart_rules.append({
@@ -677,6 +680,7 @@ class CardPredictor:
             for rule in self.smart_rules:
                 rules_by_suit[rule['predict']].append(rule)
 
+            now_ts = time.time()
             # Chercher dans les 3 TOP de chaque couleur
             for suit in ['♠️', '❤️', '♦️', '♣️']:
                 suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
@@ -687,10 +691,16 @@ class CardPredictor:
                     if rule['trigger'] in cards:
                         key = f"{rule['trigger']}_{rule['predict']}"
                         
+                        # ✅ VERIFICATION DU COOLDOWN DE 30 MIN POUR CETTE RÈGLE
+                        last_used = self.used_inter_rules.get(rule['trigger'], 0)
+                        if now_ts - last_used < 1800:
+                            logger.info(f"⏳ Règle INTER {rule['trigger']} en cooldown (reste {int(1800 - (now_ts-last_used))}s)")
+                            continue
+
                         # Vérifier quarantaine
                         if key in self.quarantined_rules:
                             qua_data = self.quarantined_rules[key]
-                            if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
+                            if isinstance(qua_data, dict) and now_ts < qua_data.get('expires_at', 0):
                                 logger.debug(f"🔒 Règle en quarantaine: {key}")
                                 continue
                             elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
@@ -960,6 +970,53 @@ class CardPredictor:
         return verification_result
 
 
+    def get_prediction(self, message: str) -> Optional[Dict[str, Any]]:
+        """
+        Détermine la prédiction à faire basée sur la première carte du message.
+        Gère le cooldown de 30 min pour les règles INTER.
+        """
+        info = self.get_first_card_info(message)
+        if not info: return None
+        
+        full_card, suit = info
+        now = time.time()
+        cooldown_period = 30 * 60 # 30 minutes en secondes
+
+        # 1. Vérifier les règles INTER d'abord si le mode est actif
+        if self.is_inter_mode_active and self.smart_rules:
+            # Trier les règles pour s'assurer de tester les plus fréquentes d'abord (Top 4)
+            sorted_rules = sorted(self.smart_rules, key=lambda x: x.get('count', 0), reverse=True)
+            
+            for rule in sorted_rules:
+                if rule.get('trigger') == full_card:
+                    rule_key = f"INTER_{full_card}_{rule.get('predict')}"
+                    last_used = self.inter_rules_last_used.get(rule_key, 0)
+                    
+                    # Cooldown strict de 30 minutes
+                    if now - last_used >= cooldown_period:
+                        # Règle utilisable
+                        self.inter_rules_last_used[rule_key] = now
+                        self._save_data(self.inter_rules_last_used, 'inter_rules_last_used.json')
+                        return {
+                            'suit': rule.get('predict'),
+                            'is_inter': True,
+                            'trigger': full_card
+                        }
+                    else:
+                        logger.info(f"⏳ Règle INTER {rule_key} déjà utilisée récemment. Cooldown actif.")
+                        # On continue la boucle pour voir s'il y a un autre Top (2, 3 ou 4) pour ce déclencheur
+                        continue
+
+        # 2. Fallback sur les règles statiques
+        if full_card in STATIC_RULES:
+            return {
+                'suit': STATIC_RULES[full_card],
+                'is_inter': False,
+                'trigger': full_card
+            }
+            
+        return None
+
     def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
         target = game_number_source + 2
         txt = self.prepare_prediction_text(game_number_source, suit)
@@ -968,6 +1025,11 @@ class CardPredictor:
         if not trigger_used:
             trigger_used = self._last_trigger_used or '?'
         
+        if is_inter and trigger_used != '?':
+            # Enregistre le timestamp d'utilisation de cette règle INTER
+            self.used_inter_rules[trigger_used] = time.time()
+            self._save_data(self.used_inter_rules, 'used_inter_rules.json')
+
         self.predictions[target] = {
             'predicted_costume': suit, 
             'status': 'pending', 
