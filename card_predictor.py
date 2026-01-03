@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Any
 from collections import defaultdict
 import pytz
+import unicodedata  # <-- AJOUT pour normalisation Unicode
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -33,6 +34,15 @@ SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
 
 # Sessions de prédictions
 PREDICTION_SESSIONS = [(1, 6), (9, 12), (15, 18), (21, 24)]
+
+# <-- AJOUT : Fonction de normalisation des cartes
+def normalize_card(card: str) -> str:
+    """Normalise les chaînes de cartes pour assurer la cohérence Unicode"""
+    if not card:
+        return card
+    # Normalisation Unicode NFC + conversion ♥️ → ❤️
+    normalized = unicodedata.normalize('NFC', card)
+    return normalized.replace("♥️", "❤️")
 
 class CardPredictor:
     """Gère la logique de prédiction d'ENSEIGNE (Couleur) et la vérification."""
@@ -427,6 +437,7 @@ class CardPredictor:
     def get_all_cards_in_first_group(self, message: str) -> List[str]:
         """
         Retourne TOUTES les cartes du PREMIER groupe pour la vérification.
+        MAINTENANT AVEC NORMALISATION
         """
         match = re.search(r'\(([^)]*)\)', message)
         if not match: return []
@@ -434,7 +445,10 @@ class CardPredictor:
         details = self.extract_card_details(match.group(1))
         cards = []
         for v, c in details:
-            cards.append(f"{v.upper()}{c}")
+            # <-- MODIFICATION : Normaliser chaque carte extraite
+            card = f"{v.upper()}{c}"
+            normalized_card = normalize_card(card)
+            cards.append(normalized_card)
         return cards
         
     # --- Logique INTER (Collecte et Analyse) ---
@@ -445,20 +459,22 @@ class CardPredictor:
         if not info: return
         
         full_card, suit = info
+        # <-- MODIFICATION : Normaliser le déclencheur stocké
+        trigger_card_normalized = normalize_card(full_card)
         result_suit_normalized = suit.replace("❤️", "♥️")
         
         # Vérifier si déjà dans collected_games
         if game_number in self.collected_games:
             existing_data = self.sequential_history.get(game_number)
-            if existing_data and existing_data.get('carte') == full_card:
+            if existing_data and existing_data.get('carte') == trigger_card_normalized:
                 logger.debug(f"🧠 Jeu {game_number} déjà collecté, ignoré.")
                 return
             else:
                 # Mise à jour de la carte (cas rare mais possible)
-                logger.info(f"🧠 Jeu {game_number} mis à jour: {existing_data.get('carte') if existing_data else 'N/A'} -> {full_card}")
+                logger.info(f"🧠 Jeu {game_number} mis à jour: {existing_data.get('carte') if existing_data else 'N/A'} -> {trigger_card_normalized}")
                 self.inter_data = [e for e in self.inter_data if e.get('numero_resultat') != game_number]
 
-        self.sequential_history[game_number] = {'carte': full_card, 'date': datetime.now().isoformat()}
+        self.sequential_history[game_number] = {'carte': trigger_card_normalized, 'date': datetime.now().isoformat()}
         self.collected_games.add(game_number)
         
         n_minus_2 = game_number - 2
@@ -697,7 +713,7 @@ class CardPredictor:
             return False, None, None, None
 
         # 🔍 Vérifier toutes les cartes du 1er groupe
-        cards = self.get_all_cards_in_first_group(message)
+        cards = self.get_all_cards_in_first_group(message)  # <-- DÉJÀ NORMALISÉ
         if not cards:
             logger.debug("❌ Aucune carte dans le 1er groupe")
             return False, None, None, None
@@ -722,7 +738,10 @@ class CardPredictor:
 
                 for idx, rule in enumerate(top3):
                     # ✅ Vérifier si le déclencheur est dans le 1er groupe
-                    if rule['trigger'] in cards:
+                    # <-- MODIFICATION : Normaliser le déclencheur avant comparaison
+                    normalized_trigger = normalize_card(rule['trigger'])
+                    
+                    if normalized_trigger in cards:  # <-- COMPARAISON NORMALISÉE
                         key = f"{rule['trigger']}_{rule['predict']}"
                         
                         # Vérifier quarantaine
@@ -739,7 +758,7 @@ class CardPredictor:
                         trigger_used = rule['trigger']
                         is_inter_prediction = True
                         rule_index = idx + 1  # 1, 2 ou 3
-                        logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit}")
+                        logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit} (déclencheur normalisé: {normalized_trigger})")
                         break
                 
                 if predicted_suit:
