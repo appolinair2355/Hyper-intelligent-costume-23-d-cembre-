@@ -25,7 +25,7 @@ class TelegramBot:
     def __init__(self, token: str):
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
-        self.deployment_file_path = "deployment.zip" 
+        self.deployment_file_path = "papamaman.zip" 
         
         # Initialize advanced handlers
         self.handlers = TelegramHandlers(token)
@@ -124,4 +124,13 @@ class TelegramBot:
         except Exception as e:
             logger.error(f"Error getting bot info: {e}")
             return {}
+
+# Global instance
+bot_token = os.getenv('BOT_TOKEN')
+if not bot_token:
+    logger.error("🚨 BOT_TOKEN manquant dans l'environnement !")
+    # On laisse le bot s'initialiser mais il échouera aux appels API
+    telegram_bot = None
+else:
+    telegram_bot = TelegramBot(bot_token)
             

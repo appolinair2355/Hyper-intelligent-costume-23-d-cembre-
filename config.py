@@ -43,31 +43,16 @@ class Config:
         self._validate_config()
     
     def _get_bot_token(self) -> str:
-        """Récupère et valide le token du bot depuis les fichiers ou variables d'environnement."""
-        token = None
-        
-        # Priorité 1: Fichier secrets_config.json
-        try:
-            if os.path.exists('secrets_config.json'):
-                with open('secrets_config.json', 'r') as f:
-                    import json
-                    secrets = json.load(f)
-                    token = secrets.get('BOT_TOKEN')
-                    if token:
-                        logger.info("✅ BOT_TOKEN chargé depuis secrets_config.json")
-        except Exception as e:
-            logger.debug(f"⚠️ Impossible de lire secrets_config.json: {e}")
-        
-        # Priorité 2: Variables d'environnement
-        if not token:
-            token = os.getenv('BOT_TOKEN')
-            if token:
-                logger.info("✅ BOT_TOKEN chargé depuis variables d'environnement")
+        """Récupère et valide le token du bot depuis les variables d'environnement."""
+        token = os.getenv('BOT_TOKEN')
         
         if not token:
-            raise ValueError("BOT_TOKEN not found in secrets_config.json or environment variables.")
+            logger.error("❌ BOT_TOKEN manquant !")
+            return ""
+            
         if ':' not in token or not token.split(':')[0].isdigit():
-            raise ValueError("Invalid bot token format")
+            logger.error(f"Invalid bot token format: {token[:5]}...")
+            return ""
 
         logger.info(f"✅ BOT_TOKEN configuré: {token[:10]}...")
         return token

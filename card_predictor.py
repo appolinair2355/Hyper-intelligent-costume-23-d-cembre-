@@ -1,466 +1,120 @@
-# card_predictor.py - VERSION CORRIGÉE ET STABILISÉE
+# card_predictor.py
 
 import re
+import json
 import logging
 import time
 import os
-import json
 from datetime import datetime
-from typing import Optional, Dict, List, Tuple, Any
-from collections import defaultdict
-import pytz
-import unicodedata  # <-- AJOUT pour normalisation Unicode
+from typing import Dict, List, Tuple, Optional, Any
+from collections import Counter, defaultdict
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
-# ================== CONFIG ==================
-BENIN_TZ = pytz.timezone("Africa/Porto-Novo")
-
-# --- 1. RÈGLES STATIQUES (13 Règles Exactes) ---
-# Toutes les clés normalisées vers ❤️ pour cohérence interne
 STATIC_RULES = {
-    "10♦️": "♠️", "10♠️": "❤️", 
-    "9♣️": "❤️", "9♦️": "♠️",
-    "8♣️": "♠️", "8♠️": "♣️", 
-    "7♠️": "♠️", "7♣️": "♣️",
-    "6♦️": "♣️", "6♣️": "♦️", 
-    "A❤️": "❤️", 
-    "5❤️": "❤️", "5♠️": "♠️"
+    'A♠️': '❤️', '2♠️': '♣️', '3♠️': '♦️', '4♠️': '♠️',
+    'A❤️': '♣️', '2❤️': '♦️', '3❤️': '♠️', '4❤️': '❤️',
+    'A♦️': '♠️', '2♦️': '❤️', '3♦️': '♣️', '4♦️': '♦️',
+    'A♣️': '♦️', '2♣️': '♠️', '3♣️': '❤️', '4♣️': '♣️'
 }
 
-# Symboles pour les status de vérification (normalisés)
-SYMBOL_MAP = {0: '✅0️⃣', 1: '✅1️⃣', 2: '✅2️⃣', 'lost': '❌'}
-
-# Sessions de prédictions
-PREDICTION_SESSIONS = [(1, 6), (9, 12), (15, 18), (21, 24)]
-
-# <-- AJOUT : Fonction de normalisation des cartes
-def normalize_card(card: str) -> str:
-    """Normalise les chaînes de cartes pour assurer la cohérence Unicode"""
-    if not card:
-        return card
-    # Normalisation Unicode NFC + conversion ♥️ → ❤️
-    normalized = unicodedata.normalize('NFC', card)
-    return normalized.replace("♥️", "❤️")
-
 class CardPredictor:
-    """Gère la logique de prédiction d'ENSEIGNE (Couleur) et la vérification."""
-
     def __init__(self, telegram_message_sender=None):
-        # <<<<<<<<<<<<<<<< ZONE CRITIQUE À MODIFIER PAR L'UTILISATEUR >>>>>>>>>>>>>>>>
-        self.HARDCODED_SOURCE_ID = -1002682552255      # ID du canal SOURCE
-        self.HARDCODED_PREDICTION_ID = -1003329818758   # ID du canal PRÉDICTION
-        # <<<<<<<<<<<<<<<< FIN ZONE CRITIQUE >>>>>>>>>>>>>>>>
-        
-        # Stockage temporaire du rule_index et trigger pour passer à make_prediction
-        self._last_rule_index = 0
-        self._last_trigger_used = None
-
-        # --- A. Chargement des Données ---
-        # CORRECTION : force_dict=True pour les dictionnaires
-        self.predictions = self._load_data('predictions.json', force_dict=True) 
-        self.processed_messages = self._load_data('processed.json', is_set=True) 
-        self.last_prediction_time = self._load_data('last_prediction_time.json', is_scalar=True) or 0
-        self.last_predicted_game_number = self._load_data('last_predicted_game_number.json', is_scalar=True) or 0
-        self.consecutive_fails = self._load_data('consecutive_fails.json', is_scalar=True) or 0
-        self.pending_edits: Dict[int, Dict] = self._load_data('pending_edits.json', force_dict=True)
-        
-        # --- B. Configuration Canaux ---
-        raw_config = self._load_data('channels_config.json', force_dict=True)
-        self.config_data = raw_config if isinstance(raw_config, dict) else {}
-        
-        self.target_channel_id = self.config_data.get('target_channel_id')
-        if not self.target_channel_id and self.HARDCODED_SOURCE_ID != 0:
-            self.target_channel_id = self.HARDCODED_SOURCE_ID
-            logger.info(f"✅ Canal SOURCE (codé en dur): {self.target_channel_id}")
-            
-        self.prediction_channel_id = self.config_data.get('prediction_channel_id')
-        if not self.prediction_channel_id and self.HARDCODED_PREDICTION_ID != 0:
-            self.prediction_channel_id = self.HARDCODED_PREDICTION_ID
-            logger.info(f"✅ Canal PRÉDICTION (codé en dur): {self.prediction_channel_id}")
-        
-        # --- C. Logique INTER ---
         self.telegram_message_sender = telegram_message_sender
-        self.active_admin_chat_id = self._load_data('active_admin_chat_id.json', is_scalar=True)
-        
-        # CORRECTION : force_dict=True pour les dictionnaires
-        self.sequential_history: Dict[int, Dict] = self._load_data('sequential_history.json', force_dict=True) 
-        self.inter_data: List[Dict] = self._load_data('inter_data.json') 
-        self.is_inter_mode_active = self._load_data('inter_mode_status.json', is_scalar=True)
-        self.smart_rules = self._load_data('smart_rules.json') 
-        self.last_analysis_time = self._load_data('last_analysis_time.json', is_scalar=True) or 0
-        self.collected_games = self._load_data('collected_games.json', is_set=True)
-        
-        self.single_trigger_until = self._load_data('single_trigger_until.json', is_scalar=True) or 0
-        
-        # Nouvelles données
-        self.quarantined_rules = self._load_data('quarantined_rules.json', force_dict=True)
-        self.wait_until_next_update = self._load_data('wait_until_next_update.json', is_scalar=True) or 0
-        self.last_inter_update_time = self._load_data('last_inter_update.json', is_scalar=True) or 0
-        self.last_report_sent = self._load_data('last_report_sent.json', force_dict=True)
-        
-        if self.is_inter_mode_active is None:
-            self.is_inter_mode_active = True
-        
-        self.prediction_cooldown = 30
-        
-        if self.inter_data and not self.is_inter_mode_active and not self.smart_rules:
-             self.analyze_and_set_smart_rules(initial_load=True)
+        self.predictions = {}
+        self.inter_data = []
+        self.smart_rules = []
+        self.deleted_tops = [] # Liste des 10 derniers tops supprimés
+        self.collected_games = set()
+        self.sequential_history = {} # Nouveau : historique séquentiel (N-2 -> N)
+        # Configuration automatique forcée
+        self.target_channel_id = -1002682552255
+        self.prediction_channel_id = -1003554569009
+        self.is_inter_mode_active = True # Activé par défaut
+        self.auto_prediction_enabled = True
+        self.last_predicted_game_number = 0
+        self.last_prediction_time = 0.0
+        self.prediction_cooldown = 120
+        self._last_trigger_used = None
+        self._load_all_data()
+        # S'assurer que les IDs sont bien ceux demandés même après chargement
+        self.target_channel_id = -1002682552255
+        self.prediction_channel_id = -1003554569009
+        self._save_all_data()
 
-    # --- Persistance ---
-    def _load_data(self, filename: str, is_set: bool = False, is_scalar: bool = False, force_dict: bool = False) -> Any:
-        """
-        Charge les données depuis un fichier JSON avec gestion robuste des types.
-        
-        Args:
-            filename: Nom du fichier
-            is_set: Si True, retourne un set (par défaut: list)
-            is_scalar: Si True, retourne un scalaire (par défaut: None)
-            force_dict: Si True, FORCE le retour d'un dictionnaire (prioritaire sur is_set)
-        """
+    def _load_all_data(self):
         try:
-            # Déterminer le type attendu
-            expects_dict = force_dict or filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
-            
-            if not os.path.exists(filename):
-                if is_set: return set()
-                if is_scalar: return None
-                return {} if expects_dict else []
-                
-            with open(filename, 'r') as f:
-                content = f.read().strip()
-                if not content:
-                    if is_set: return set()
-                    if is_scalar: return None
-                    return {} if expects_dict else []
-                    
-                data = json.loads(content)
-                
-                # Conversion des types
-                if is_set:
-                    return set(data) if isinstance(data, list) else set()
-                    
-                # Force dict si nécessaire
-                if expects_dict:
-                    if isinstance(data, dict):
-                        # Conversion des clés en int pour certains fichiers
-                        if filename in ['sequential_history.json', 'predictions.json', 'pending_edits.json']:
-                            return {int(k): v for k, v in data.items()}
-                        return data
-                    else:
-                        logger.warning(f"⚠️ {filename} devrait être un dict, mais c'est un {type(data).__name__}. Retour d'un dict vide.")
-                        return {}
-                
-                # Retour par défaut
-                return data
-                
+            if os.path.exists('predictions.json'):
+                with open('predictions.json', 'r') as f: self.predictions = json.load(f)
+            if os.path.exists('inter_data.json'):
+                with open('inter_data.json', 'r') as f: self.inter_data = json.load(f)
+            if os.path.exists('smart_rules.json'):
+                with open('smart_rules.json', 'r') as f: self.smart_rules = json.load(f)
+            if os.path.exists('deleted_tops.json'):
+                with open('deleted_tops.json', 'r') as f: self.deleted_tops = json.load(f)
+            if os.path.exists('sequential_history.json'):
+                with open('sequential_history.json', 'r') as f: self.sequential_history = {int(k): v for k, v in json.load(f).items()}
+            if os.path.exists('inter_mode_status.json'):
+                with open('inter_mode_status.json', 'r') as f: self.is_inter_mode_active = json.load(f).get('active', True)
         except Exception as e:
-            logger.error(f"❌ Erreur chargement {filename}: {e}")
-            expects_dict = force_dict or filename in ['channels_config.json', 'predictions.json', 'sequential_history.json', 'smart_rules.json', 'pending_edits.json']
-            if is_set: return set()
-            if is_scalar: return None
-            return {} if expects_dict else []
-
-    def _save_data(self, data: Any, filename: str):
-        """Sauvegarde les données dans un fichier JSON avec gestion des types."""
-        try:
-            # Conversion pour JSON
-            if isinstance(data, set):
-                data = list(data)
-            
-            # S'assurer que channels_config.json a des IDs int
-            if filename == 'channels_config.json' and isinstance(data, dict):
-                if 'target_channel_id' in data and data['target_channel_id'] is not None:
-                    data['target_channel_id'] = int(data['target_channel_id'])
-                if 'prediction_channel_id' in data and data['prediction_channel_id'] is not None:
-                    data['prediction_channel_id'] = int(data['prediction_channel_id'])
-            
-            # Log pour debug
-            logger.debug(f"💾 Sauvegarde {filename} ({type(data).__name__})")
-            
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=4)
-                
-        except Exception as e:
-            logger.error(f"❌ Erreur sauvegarde {filename}: {e}")
+            logger.error(f"Error loading data: {e}")
 
     def _save_all_data(self):
-        """Sauvegarde TOUS les fichiers de données."""
         try:
-            self._save_data(self.predictions, 'predictions.json')
-            self._save_data(self.processed_messages, 'processed.json')
-            self._save_data(self.last_prediction_time, 'last_prediction_time.json')
-            self._save_data(self.last_predicted_game_number, 'last_predicted_game_number.json')
-            self._save_data(self.consecutive_fails, 'consecutive_fails.json')
-            self._save_data(self.inter_data, 'inter_data.json')
-            self._save_data(self.sequential_history, 'sequential_history.json')
-            self._save_data(self.is_inter_mode_active, 'inter_mode_status.json')
-            self._save_data(self.smart_rules, 'smart_rules.json')
-            self._save_data(self.active_admin_chat_id, 'active_admin_chat_id.json')
-            self._save_data(self.last_analysis_time, 'last_analysis_time.json')
-            self._save_data(self.pending_edits, 'pending_edits.json')
-            self._save_data(self.collected_games, 'collected_games.json')
-            self._save_data(self.single_trigger_until, 'single_trigger_until.json')
-            self._save_data(self.quarantined_rules, 'quarantined_rules.json')
-            self._save_data(self.wait_until_next_update, 'wait_until_next_update.json')
-            self._save_data(self.last_inter_update_time, 'last_inter_update.json')
-            self._save_data(self.last_report_sent, 'last_report_sent.json')
-            logger.debug("💾 Toutes les données sauvegardées avec succès")
+            with open('predictions.json', 'w') as f: json.dump(self.predictions, f)
+            with open('inter_data.json', 'w') as f: json.dump(self.inter_data, f)
+            with open('smart_rules.json', 'w') as f: json.dump(self.smart_rules, f)
+            with open('deleted_tops.json', 'w') as f: json.dump(self.deleted_tops, f)
+            with open('sequential_history.json', 'w') as f: json.dump(self.sequential_history, f)
+            with open('inter_mode_status.json', 'w') as f: json.dump({'active': self.is_inter_mode_active}, f)
+            with open('config_ids.json', 'w') as f:
+                json.dump({
+                    'target_channel_id': self.target_channel_id,
+                    'prediction_channel_id': self.prediction_channel_id
+                }, f)
         except Exception as e:
-            logger.error(f"❌ Erreur sauvegarde globale : {e}")
+            logger.error(f"Error saving data: {e}")
 
-    # ======== TEMPS & SESSIONS ========
-    def now(self):
-        return datetime.now(BENIN_TZ)
-    
-    def is_in_session(self):
-        h = self.now().hour
-        return any(start <= h < end for start, end in PREDICTION_SESSIONS)
-    
-    def current_session_label(self):
-        h = self.now().hour
-        for start, end in PREDICTION_SESSIONS:
-            if start <= h < end:
-                return f"{start:02d}h00 – {end:02d}h00"
-        return "Hors session"
-    
-    # ======== RAPPORTS ========
-    def check_and_send_reports(self):
-        """Envoie les rapports de fin de session (appelé régulièrement)."""
-        if not self.telegram_message_sender or not self.prediction_channel_id:
-            logger.debug("⚠️ Pas de sender ou prediction_channel_id")
-            return
-        
-        now = self.now()
-        key_date = now.strftime("%Y-%m-%d")
-        
-        # Heures de fin de session : 6h, 12h, 18h, 00h (minuit)
-        report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
-        
-        # Vérifier si c'est une heure de rapport
-        if now.hour not in report_hours:
-            return
-        
-        key = f"{key_date}_{now.hour}"
-        
-        # Éviter d'envoyer deux fois
-        if self.last_report_sent.get(key):
-            return
-        
-        logger.info(f"📊 Envoi rapport de session à {now.hour}h...")
-        
-        start, end = report_hours[now.hour]
-        
-        # Compter les prédictions complétées (won ou lost)
-        session_predictions = {}
-        for game_num, pred in self.predictions.items():
-            status = pred.get('status')
-            if status in ['won', 'lost']:
-                session_predictions[game_num] = pred
-        
-        total = len(session_predictions)
-        wins = sum(1 for p in session_predictions.values() if p.get("status") == 'won')
-        fails = sum(1 for p in session_predictions.values() if p.get("status") == 'lost')
-        win_rate = (wins / total * 100) if total > 0 else 0
-        fail_rate = (fails / total * 100) if total > 0 else 0
-        
-        # Construire le message
-        msg = (f"🎬 **BILAN DE SESSION**\n\n"
-               f"⏰ Heure de Bénin : {now.strftime('%H:%M:%S - %d/%m/%Y')}\n"
-               f"📅 Session : {start} – {end}\n"
-               f"🧠 Mode : {'✅ INTER ACTIF' if self.is_inter_mode_active else '❌ STATIQUE'}\n"
-               f"🔄 Règles : {self.get_inter_version()}\n\n"
-               f"📊 **RÉSULTATS**\n"
-               f"📈 Total : {total}\n"
-               f"✅ Succès : {wins} ({win_rate:.1f}%)\n"
-               f"❌ Échecs : {fails} ({fail_rate:.1f}%)\n\n"
-               f"💖 Merci à tous sur le code promo !\n\n"
-               f"👨‍💻 Dev : Sossou Kouamé\n"
-               f"🎟️ Code : Koua229")
-        
-        try:
-            self.telegram_message_sender(self.prediction_channel_id, msg)
-            self.last_report_sent[key] = True
-            self._save_all_data()
-            logger.info(f"✅ Rapport {start}-{end} envoyé: {total} prédictions, {wins} succès")
-        except Exception as e:
-            logger.error(f"❌ Erreur envoi rapport: {e}")
-    
-    def get_inter_version(self):
-        if not self.last_inter_update_time:
-            return "Base neuve"
-        return datetime.fromtimestamp(self.last_inter_update_time, BENIN_TZ).strftime("%Y-%m-%d | %Hh%M")
-    
-    def _get_last_update_display(self):
-        """Retourne la date et heure de la dernière mise à jour INTER ou un message par défaut."""
-        if not self.last_inter_update_time:
-            return "Pas encore de mise à jour"
-        return datetime.fromtimestamp(self.last_inter_update_time, BENIN_TZ).strftime("%d/%m/%Y à %H:%M:%S")
-    
-    def get_session_report_preview(self):
-        """Retourne un aperçu du rapport de fin de session avec le temps restant."""
-        now = self.now()
-        report_hours = {6: ("01h00", "06h00"), 12: ("09h00", "12h00"), 18: ("15h00", "18h00"), 0: ("21h00", "00h00")}
-        
-        # Trouver la prochaine heure de rapport
-        next_report_hour = None
-        for h in sorted(report_hours.keys()):
-            if h > now.hour:
-                next_report_hour = h
-                break
-        if next_report_hour is None:
-            next_report_hour = min(report_hours.keys())
-        
-        # Temps restant
-        minutes_until = ((next_report_hour - now.hour) * 60 - now.minute) % (24 * 60)
-        hours = minutes_until // 60
-        mins = minutes_until % 60
-        
-        # Stats de prédictions
-        session_predictions = {k: v for k, v in self.predictions.items() if v.get('status') in ['won', 'lost', 'pending']}
-        total = len(session_predictions)
-        wins = sum(1 for p in session_predictions.values() if str(p.get("status", "")).startswith("✅") or p.get("status") == 'won')
-        fails = sum(1 for p in session_predictions.values() if p.get("status") in ["❌", "lost"])
-        win_rate = (wins / total * 100) if total else 0
-        fail_rate = (fails / total * 100) if total else 0
-        
-        start, end = report_hours[next_report_hour]
-        
-        msg = (f"📋 **APERÇU DU BILAN**\n\n"
-               f"⏰ Heure de Bénin : {now.strftime('%H:%M:%S - %d/%m/%Y')}\n"
-               f"🎯 Prochain bilan : {start} – {end}\n"
-               f"⏳ Temps restant : {hours}h{mins:02d}\n\n"
-               f"🧠 Mode Intelligent : {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}\n"
-               f"🔄 Dernière mise à jour IA : {self._get_last_update_display()}\n\n"
-               f"📊 **STATISTIQUES ACTUELLES**\n"
-               f"📈 Prédictions : {total}\n"
-               f"✅ Réussites : {wins} ({win_rate:.1f}%)\n"
-               f"❌ Échecs : {fails} ({fail_rate:.1f}%)\n\n"
-               f"👨‍💻 **Développeur** : Sossou Kouamé\n"
-               f"🎟️ **Code Promo** : Koua229")
-        
-        return msg
-    
-    def set_channel_id(self, channel_id: int, channel_type: str):
-        if not isinstance(self.config_data, dict): self.config_data = {}
-        if channel_type == 'source':
-            self.target_channel_id = channel_id
-            self.config_data['target_channel_id'] = channel_id
-        elif channel_type == 'prediction':
-            self.prediction_channel_id = channel_id
-            self.config_data['prediction_channel_id'] = channel_id
-        self._save_data(self.config_data, 'channels_config.json')
-        return True
+    def extract_game_number(self, text: str) -> Optional[int]:
+        # Nettoyage pour ignorer la casse
+        text = text.upper()
+        # Recherche précise du numéro de jeu avec préfixe N suivi de chiffres, supporte #N, N, #n, n
+        m = re.search(r'(?:#|N|#N)(\d+)', text, re.IGNORECASE)
+        if m:
+            return int(m.group(1))
+        # Recherche précise du numéro de jeu entre cercles bleus
+        m = re.search(r'🔵(\d+)🔵', text)
+        if m:
+            return int(m.group(1))
+        return None
 
-    # --- Outils d'Extraction/Comptage ---
-    
-    def _extract_parentheses_content(self, text: str) -> List[str]:
-        """Extrait le contenu de toutes les sections de parenthèses (non incluses)."""
-        pattern = r'\(([^)]+)\)'
-        return re.findall(pattern, text)
-
-    def _count_cards_in_content(self, content: str) -> int:
-        """Compte les symboles de cartes (♠️, ♥️, ♦️, ♣️) dans une chaîne, en normalisant ❤️ vers ♥️."""
-        normalized_content = content.replace("❤️", "♥️")
-        return len(re.findall(r'(\d+|[AKQJ])(♠️|♥️|♦️|♣️)', normalized_content, re.IGNORECASE))
-        
-    def has_pending_indicators(self, text: str) -> bool:
-        """Vérifie si le message contient des indicateurs suggérant qu'il sera édité (temporaire)."""
-        indicators = ['⏰', '▶', '🕐', '➡️']
-        return any(indicator in text for indicator in indicators)
-
-    def has_completion_indicators(self, text: str) -> bool:
-        """Vérifie si le message contient des indicateurs de complétion après édition (✅ ou 🔰)."""
-        completion_indicators = ['✅', '🔰']
-        return any(indicator in text for indicator in completion_indicators)
-        
-    def is_final_result_structurally_valid(self, text: str) -> bool:
-        """
-        Vérifie si la structure du message correspond à un format de résultat final connu.
-        Gère les messages #T, #R et les formats édités basés sur le compte de cartes.
-        """
-        matches = self._extract_parentheses_content(text)
-        num_sections = len(matches)
-
-        if num_sections < 2: return False
-
-        # Règle pour les messages finalisés (#T) ou normaux (#R)
-        if ('#T' in text or '🔵#R' in text) and num_sections >= 2:
-            return True
-
-        # Messages Édités (basé sur le compte de cartes)
-        if num_sections == 2:
-            content_1 = matches[0]
-            content_2 = matches[1]
-            
-            count_1 = self._count_cards_in_content(content_1)
-            count_2 = self._count_cards_in_content(content_2)
-
-            # Formats acceptés: 3/2, 3/3, 2/3 (3 cartes dans le premier groupe sont supportées)
-            if (count_1 == 3 and count_2 == 2) or \
-               (count_1 == 3 and count_2 == 3) or \
-               (count_1 == 2 and count_2 == 3):
-                return True
-
-        return False
-        
-    # --- Outils d'Extraction (Continuation) ---
-    
-    def extract_game_number(self, message: str) -> Optional[int]:
-        match = re.search(r'#N(\d+)\.', message, re.IGNORECASE) 
-        if not match: match = re.search(r'🔵(\d+)🔵', message)
-        num = int(match.group(1)) if match else None
-        if num:
-            logger.debug(f"🎮 Numéro du jeu extrait: {num}")
-        return num
+    def get_all_cards_in_first_group(self, text: str) -> List[str]:
+        # Nettoie le texte pour uniformiser les cœurs et supprimer les espaces parasites
+        # On remplace aussi les cœurs sans variation selector pour la détection
+        text = text.replace("❤️", "♥️").replace("❤️️", "♥️").replace(" ", "")
+        # Recherche toutes les cartes (Valeur + Enseigne)
+        # Amélioration du regex pour capturer les variantes d'enseignes
+        cards = re.findall(r'([AJQK\d]+(?:♠️|♥️|♦️|♣️|♠|❤️|♦|♣))', text)
+        # Normalisation immédiate des cartes extraites
+        return [self.normalize_card(c) for c in cards]
 
     def extract_card_details(self, content: str) -> List[Tuple[str, str]]:
-        # Normalise ♥️ en ❤️ pour correspondre aux règles statiques
+        """Extrait les cartes au format (Valeur, Enseigne)."""
         normalized_content = content.replace("♥️", "❤️")
-        # Cherche Valeur + Enseigne (ex: 10♦️, A♠️)
         return re.findall(r'(\d+|[AKQJ])(♠️|❤️|♦️|♣️)', normalized_content, re.IGNORECASE)
 
-    def get_first_card_info(self, message: str) -> Optional[Tuple[str, str]]:
-        """
-        Retourne la PREMIÈRE carte du PREMIER groupe (déclencheur INTER/STATIQUE).
-        """
-        match = re.search(r'\(([^)]*)\)', message)
-        if not match: return None
-        
-        details = self.extract_card_details(match.group(1))
-        if details:
-            v, c = details[0]
-            return f"{v.upper()}{c}", c 
-        return None
-    
-    def get_all_cards_in_first_group(self, message: str) -> List[str]:
-        """
-        Retourne TOUTES les cartes du PREMIER groupe pour la vérification.
-        MAINTENANT AVEC NORMALISATION
-        """
-        match = re.search(r'\(([^)]*)\)', message)
-        if not match: return []
-        
-        details = self.extract_card_details(match.group(1))
-        cards = []
-        for v, c in details:
-            # <-- MODIFICATION : Normaliser chaque carte extraite
-            card = f"{v.upper()}{c}"
-            normalized_card = normalize_card(card)
-            cards.append(normalized_card)
-        return cards
-        
-    # --- Logique INTER (Collecte et Analyse) ---
-    
+    def normalize_card(self, card_str: str) -> str:
+        """Normalise une carte pour le stockage (cœurs uniformisés)."""
+        return card_str.replace("❤️", "♥️")
+
     def collect_inter_data(self, game_number: int, message: str):
         """Collecte les données (N-2 -> N) même sur messages temporaires (⏰)."""
         info = self.get_first_card_info(message)
         if not info: return
         
         full_card, suit = info
-        # <-- MODIFICATION : Normaliser le déclencheur stocké
-        trigger_card_normalized = normalize_card(full_card)
+        # Normaliser le déclencheur stocké
+        trigger_card_normalized = self.normalize_card(full_card)
         result_suit_normalized = suit.replace("❤️", "♥️")
         
         # Vérifier si déjà dans collected_games
@@ -491,542 +145,290 @@ class CardPredictor:
             })
             logger.info(f"🧠 Jeu {game_number} collecté pour INTER: {trigger_card} -> {result_suit_normalized}")
 
+        # Nettoyage des anciennes données (garde les 50 derniers)
         limit = game_number - 50
         self.sequential_history = {k:v for k,v in self.sequential_history.items() if k >= limit}
         self.collected_games = {g for g in self.collected_games if g >= limit}
         
         self._save_all_data()
 
-    
-    def analyze_and_set_smart_rules(self, chat_id: Optional[int] = None, initial_load: bool = False, force_activate: bool = False):
-        """
-        Analyse les données pour trouver les Top 3 déclencheurs par ENSEIGNE DE RÉSULTAT.
-        Crée des règles même avec peu de données (minimum 1 occurrence).
-        """
-        # Grouper par enseigne de RÉSULTAT (♠️, ♥️, ♦️, ♣️)
-        result_suit_groups = defaultdict(lambda: defaultdict(int))
+    def get_first_card_info(self, message: str) -> Optional[Tuple[str, str]]:
+        """Retourne la PREMIÈRE carte du PREMIER groupe (déclencheur)."""
+        # On cherche d'abord dans les parenthèses
+        match = re.search(r'\(([^)]*)\)', message)
+        content = match.group(1) if match else message
         
-        for entry in self.inter_data:
-            trigger_card = entry['declencheur']  # Ex: 6♦️
-            result_suit = entry['result_suit']   # Ex: ♣️
-            result_suit_groups[result_suit][trigger_card] += 1
-        
-        self.smart_rules = []
-        
-        # Pour chaque enseigne de résultat
-        for result_suit in ['♠️', '♥️', '♦️', '♣️']:
-            triggers_for_this_suit = result_suit_groups.get(result_suit, {})
-            
-            if not triggers_for_this_suit:
-                continue
-            
-            # Trier par fréquence et prendre jusqu'à 3 meilleurs
-            top_triggers = sorted(
-                triggers_for_this_suit.items(), 
-                key=lambda x: x[1], 
-                reverse=True
-            )[:3]
-            
-            for trigger_card, count in top_triggers:
-                self.smart_rules.append({
-                    'trigger': trigger_card,
-                    'predict': result_suit,  # Utiliser directement l'enseigne du résultat
-                    'count': count,
-                    'result_suit': result_suit
-                })
-        
-        # Activer le mode INTER si on a au moins 1 règle
-        if force_activate:
-            self.is_inter_mode_active = True
-            if chat_id: self.active_admin_chat_id = chat_id
-        elif self.smart_rules:
-            self.is_inter_mode_active = True
-        elif not initial_load:
-            self.is_inter_mode_active = False
-            
-        self.last_analysis_time = time.time()
-        self._save_all_data()
+        details = self.extract_card_details(content)
+        if details:
+            v, c = details[0]
+            return f"{v.upper()}{c}", c 
+        return None
 
-        logger.info(f"🧠 Analyse terminée. Règles trouvées: {len(self.smart_rules)}. Mode actif: {self.is_inter_mode_active}")
-        
-        # Notification si demandée
-        if chat_id is not None and self.telegram_message_sender:
-            if self.smart_rules:
-                msg = f"✅ **Analyse terminée !**\n\n{len(self.smart_rules)} règles créées à partir de {len(self.inter_data)} jeux collectés.\n\n🧠 **Mode INTER activé automatiquement**"
-            else:
-                msg = f"⚠️ **Pas assez de données**\n\n{len(self.inter_data)} jeux collectés. Continuez à jouer pour créer des règles."
-            self.telegram_message_sender(chat_id, msg)
-        
-        # SORTIE DE QUARANTAINE (après analyse)
-        for key in list(self.quarantined_rules.keys()):
-            try:
-                trigger, suit = key.split("_", 1)
-                rule = next(
-                    (r for r in self.smart_rules if r.get("trigger") == trigger and r.get("predict") == suit),
-                    None
-                )
-                if not rule or rule.get("count", 0) > self.quarantined_rules[key]:
-                    del self.quarantined_rules[key]
-                    logger.info(f"🔓 Quarantaine levée : {key}")
-            except Exception as e:
-                logger.error(f"Erreur traitement quarantaine {key}: {e}")
-
-    def check_and_update_rules(self):
-        """Vérification périodique (30 minutes)."""
-        if time.time() - self.last_analysis_time > 1800:
-            logger.info("🧠 Mise à jour INTER périodique (30 min).")
-            # Force l'activation si on a des données
-            if len(self.inter_data) >= 3:
-                self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id, force_activate=True)
-            else:
-                self.analyze_and_set_smart_rules(chat_id=self.active_admin_chat_id)
-
-    def check_and_send_automatic_predictions(self):
-        """DÉSACTIVÉ - Les prédictions sont basées sur les messages du canal source uniquement."""
-        pass
-
-    def get_bot_status(self):
-        total = len(self.predictions)
-        wins = sum(1 for p in self.predictions.values() if str(p.get("status", "")).startswith("✅") or p.get("status") == "won")
-        fails = sum(1 for p in self.predictions.values() if p.get("status") in ["❌", "lost"])
-        
-        return (f"📊 **STATUT DU BOT**\n\n"
-                f"🧠 Mode intelligent : {'ACTIF' if self.is_inter_mode_active else 'INACTIF'}\n"
-                f"🎯 Session : {self.current_session_label()}\n"
-                f"📈 Prédictions : {total}\n"
-                f"✅ Réussites : {wins}\n"
-                f"❌ Échecs : {fails}\n\n"
-                f"🔖 Version IA : {self.get_inter_version()}")
-    
-    def get_inter_status(self) -> Tuple[str, Dict]:
-        """Retourne le statut du mode INTER avec message et clavier."""
-        data_count = len(self.inter_data)
-        
-        if not self.smart_rules:
-            message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
-            message += f"📊 **{data_count} jeux collectés**\n"
-            message += "⚠️ Pas encore assez de règles créées.\n\n"
-            message += "**Cliquez sur 'Analyser' pour générer les règles !**"
-            
-            keyboard_buttons = [
-                [{'text': '🔄 Analyser et Activer', 'callback_data': 'inter_apply'}]
-            ]
-            
-            if self.is_inter_mode_active:
-                keyboard_buttons.append([{'text': '❌ Désactiver', 'callback_data': 'inter_default'}])
-            
-            keyboard = {'inline_keyboard': keyboard_buttons}
-        else:
-            rules_by_result = defaultdict(list)
-            for rule in self.smart_rules:
-                rules_by_result[rule['result_suit']].append(rule)
-            
-            message = f"🧠 **MODE INTER - {'✅ ACTIF' if self.is_inter_mode_active else '❌ INACTIF'}**\n\n"
-            message += f"📊 **{len(self.smart_rules)} règles** créées ({data_count} jeux analysés):\n\n"
-            
-            for suit in ['♠️', '♥️', '♦️', '♣️']:
-                if suit in rules_by_result:
-                    message += f"**Pour prédire {suit}:**\n"
-                    for rule in rules_by_result[suit]:
-                        message += f"  • {rule['trigger']} ({rule['count']}x)\n"
-                    message += "\n"
-            
-            if self.is_inter_mode_active:
-                keyboard = {
-                    'inline_keyboard': [
-                        [{'text': '🔄 Relancer Analyse', 'callback_data': 'inter_apply'}],
-                        [{'text': '❌ Désactiver', 'callback_data': 'inter_default'}]
-                    ]
-                }
-            else:
-                keyboard = {
-                    'inline_keyboard': [
-                        [{'text': '🚀 Activer INTER', 'callback_data': 'inter_apply'}]
-                    ]
-                }
-        
-        return message, keyboard
-    
-    def _apply_quarantine(self, prediction):
-        """Applique la quarantaine intelligente après un échec - mise en quarantaine 1h."""
-        trigger_used = prediction.get('predicted_from_trigger')
-        predicted_suit = prediction.get('predicted_costume')
-        
-        if not trigger_used or not predicted_suit:
+    def analyze_and_set_smart_rules(self, chat_id=None, force_activate=False):
+        if len(self.inter_data) < 1: # Réduit le minimum pour tester et s'assurer que ça tourne
+            logger.warning("⚠️ Pas assez de données pour l'analyse INTER.")
             return
         
-        key = f"{trigger_used}_{predicted_suit}"
+        # On regroupe les résultats par déclencheur pour voir ce qui sort le plus souvent après une carte
+        trigger_patterns = defaultdict(Counter)
+        for entry in self.inter_data:
+            # On utilise 'declencheur' et 'result_suit' de inter_data
+            trigger_patterns[entry['declencheur']][entry['result_suit']] += 1
+            
+        new_rules = []
+        for trigger, results in trigger_patterns.items():
+            # Pour chaque déclencheur, on prend le résultat le plus fréquent
+            suit, count = results.most_common(1)[0]
+            # On ne garde que si le déclencheur a été vu au moins 1 fois
+            if count >= 1:
+                new_rules.append({
+                    'trigger': trigger, 
+                    'predict': suit, 
+                    'count': count,
+                    'total': sum(results.values())
+                })
         
-        for rule in self.smart_rules:
-            if rule.get('trigger') == trigger_used and rule.get('predict') == predicted_suit:
-                # Enregistrer le TOP en quarantaine avec timestamp expiration
-                self.quarantined_rules[key] = {
-                    'count': rule.get('count', 1),
-                    'timestamp': time.time(),
-                    'expires_at': time.time() + 3600  # Expiration après 1 heure
-                }
-                logger.info(f"🔒 Quarantaine appliquée: {key} (expire dans 1h)")
+        # Trier par fiabilité (nombre d'occurrences)
+        new_rules.sort(key=lambda x: x['count'], reverse=True)
+        
+        self.smart_rules = new_rules
+        if force_activate: self.is_inter_mode_active = True
+        self._save_all_data()
+        logger.info(f"✨ Mise à jour des règles INTER effectuée ({len(new_rules)} règles)")
+
+    def should_predict(self, text: str) -> Tuple[bool, Optional[int], Optional[str], bool]:
+        if not self.auto_prediction_enabled: return False, None, None, False
+        game_num = self.extract_game_number(text)
+        if not game_num: return False, None, None, False
+        
+        # RÈGLE STRICTE : Écart de exactement 3 par rapport au dernier numéro prédit
+        if self.last_predicted_game_number > 0:
+            target_game = game_num + 2
+            gap = target_game - self.last_predicted_game_number
+            if gap != 3:
+                logger.info(f"🚫 Prédiction bloquée: Écart {gap} != 3 (Dernier: {self.last_predicted_game_number}, Actuel: {target_game})")
+                return False, None, None, False
+        
+        # Vérifier si une prédiction est déjà en attente (pending) pour éviter d'en lancer deux
+        for p in self.predictions.values():
+            if p.get('status') == 'pending':
+                logger.info("🚫 Prédiction bloquée: Une prédiction est déjà en attente.")
+                return False, None, None, False
+        # Extraction du groupe entre parenthèses (le premier groupe uniquement pour la prédiction rapide)
+        first_group_match = re.search(r'\d+\(([^)]+)\)', text)
+        if first_group_match:
+            group_content = first_group_match.group(1)
+            cards_to_check = self.get_all_cards_in_first_group(group_content)
+        else:
+            # Fallback sur les premières cartes trouvées si format différent
+            all_cards = self.get_all_cards_in_first_group(text)
+            cards_to_check = all_cards[:3] if all_cards else []
+            
+        if not cards_to_check: return False, None, None, False
+        
+        # LOGIQUE D'EXCLUSION MUTUELLE
+        prediction, is_inter, trigger_used = None, False, None
+        
+        # 1. SI LE MODE INTER EST ACTIF -> ON N'UTILISE QUE INTER
+        if self.is_inter_mode_active:
+            if self.smart_rules:
+                # Regrouper les règles par enseigne prédite
+                rules_by_suit = defaultdict(list)
+                for rule in self.smart_rules:
+                    rules_by_suit[rule['predict']].append(rule)
+                
+                # Obtenir les Tops 7 pour chaque enseigne
+                top7_by_suit = {}
+                for suit, rules in rules_by_suit.items():
+                    top7_by_suit[suit] = [r['trigger'] for r in rules[:7]]
+                
+                # Chercher si une carte du message est dans le Top 7 d'une enseigne
+                best_rank = 99
+                rule_to_remove = -1
+                for card in cards_to_check:
+                    card_clean = card.replace("❤️", "♥️")
+                    for suit, top7 in top7_by_suit.items():
+                        if card_clean in top7:
+                            rank = top7.index(card_clean)
+                            if rank < best_rank:
+                                best_rank = rank
+                                prediction = suit
+                                trigger_used = card_clean
+                                is_inter = True
+                
+                # Supprimer le top utilisé et l'ajouter à la liste des supprimés
+                if prediction:
+                    # Ne jamais utiliser deux fois même top pour prédire
+                    # On le retire des règles et on réinitialise ses collectes
+                            for i, rule in enumerate(self.smart_rules):
+                                if rule['trigger'] == trigger_used and rule['predict'] == prediction:
+                                    # Ajouter aux supprimés avec timestamp pour expiration (1h)
+                                    self.deleted_tops.insert(0, {
+                                        'text': f"{trigger_used} avait prédit {prediction}",
+                                        'time': time.time()
+                                    })
+                                    self.deleted_tops = self.deleted_tops[:10]
+                                    
+                                    # Supprimer toutes les données liées à ce déclencheur pour repartir à zéro
+                                    self.inter_data = [d for d in self.inter_data if d['declencheur'] != trigger_used]
+                                    
+                                    # Nettoyer aussi l'historique séquentiel pour ce déclencheur
+                                    self.sequential_history = {k: v for k, v in self.sequential_history.items() if v.get('carte') != trigger_used}
+                                    
+                                    # Retirer de la liste des règles intelligentes
+                                    self.smart_rules.pop(i)
+                                    logger.info(f"🗑️ Top utilisé et remis à zéro (expirera dans 1h) : {trigger_used} -> {prediction}")
+                                    self._save_all_data()
+                                    break
+        
+        # 2. SI LE MODE INTER EST INACTIF -> ON N'UTILISE QUE LE STATIQUE
+        else:
+            info = self.get_first_card_info(text)
+            if info:
+                card_name = info[0].replace("♥️", "❤️")
+                if card_name in STATIC_RULES:
+                    prediction, trigger_used, is_inter = STATIC_RULES[card_name], info[0], False
+        
+        if prediction:
+            self._last_trigger_used = trigger_used
+            return True, game_num + 2, prediction, is_inter
+            
+        return False, None, None, False
+
+    def prepare_prediction_text(self, game_num: int, suit: str) -> str:
+        return f"🔵{game_num}🔵:{suit}statut :⏳"
+
+    def has_completion_indicators(self, text: str) -> bool:
+        return '✅' in text or '❌' in text
+
+    def _verify_prediction_common(self, text: str) -> Dict:
+        game_num = self.extract_game_number(text)
+        if not game_num: return {}
+        
+        # Extraction du premier groupe de cartes entre parenthèses
+        # Exemple: #N930. 0(J♥️10♥️J♠️) -> le groupe est J♥️10♥️J♠️
+        first_group_match = re.search(r'\d+\(([^)]+)\)', text)
+        if not first_group_match:
+            # Fallback si le format est différent mais qu'on a des cartes
+            cards = self.get_all_cards_in_first_group(text)
+            first_group_cards = cards[:3] if cards else []
+        else:
+            group_content = first_group_match.group(1)
+            first_group_cards = self.get_all_cards_in_first_group(group_content)
+
+        # On vérifie si ce numéro de jeu correspond à une prédiction en attente (jusqu'à +2)
+        target_game = None
+        for offset in [0, 1, 2]:
+            check_num = game_num - offset
+            if str(check_num) in self.predictions:
+                pred = self.predictions[str(check_num)]
+                if pred.get('status') == 'pending':
+                    target_game = str(check_num)
+                    break
+        
+        if not target_game: return {}
+        
+        pred = self.predictions[target_game]
+        predicted_suit = pred['predicted_costume']
+        
+        # Vérification si le costume prédit est présent dans le premier groupe
+        found_in_group = False
+        for card in first_group_cards:
+            # Extraction de l'enseigne de la carte du groupe
+            suit = ""
+            for s in ['♠️', '♥️', '♦️', '♣️', '♠', '❤️', '♦', '♣']:
+                if s in card:
+                    suit = s
+                    break
+            if not suit: suit = card[-1]
+            if suit in ["❤️", "❤️️"]: suit = "♥️"
+            
+            if suit == predicted_suit:
+                found_in_group = True
                 break
         
-        self.wait_until_next_update = time.time() + 1800
-        self._save_all_data()
-
-
-    # --- CŒUR DU SYSTÈME : PRÉDICTION ---
-    
-    def should_wait_for_edit(self, text: str, message_id: int) -> bool:
-        if self.has_pending_indicators(text):
-            game_number = self.extract_game_number(text)
-            if message_id not in self.pending_edits:
-                self.pending_edits[message_id] = {
-                    'game_number': game_number,
-                    'original_text': text,
-                    'timestamp': datetime.now().isoformat()
-                }
-                self._save_data(self.pending_edits, 'pending_edits.json')
-            return True
-        return False
-
-    def should_predict(self, message: str) -> Tuple[bool, Optional[int], Optional[str], Optional[bool]]:
-        self.check_and_send_reports()
-        self.check_and_update_rules()
-
-        if not self.is_in_session():
-            logger.debug(f"⚠️ Hors session. Heure Benin: {self.now().hour}h")
-            return False, None, None, None
-
-        if any(p.get('status') == 'pending' for p in self.predictions.values()):
-            logger.debug("⚠️ Une prédiction est en attente. Nouvelle prédiction annulée.")
-            return False, None, None, None
-
-        if time.time() < self.wait_until_next_update:
-            logger.debug("⏸️ Cooldown après échec/quarantaine actif")
-            return False, None, None, None
-
-        game_number = self.extract_game_number(message)
-        if not game_number:
-            logger.debug("❌ Aucun numéro de jeu trouvé")
-            return False, None, None, None
-
-        if game_number in self.predictions and self.predictions[game_number].get('status') == 'pending':
-            logger.debug(f"⚠️ Jeu {game_number} déjà prédit, en attente.")
-            return False, None, None, None
-
-        # 🔍 Vérifier toutes les cartes du 1er groupe
-        cards = self.get_all_cards_in_first_group(message)  # <-- DÉJÀ NORMALISÉ
-        if not cards:
-            logger.debug("❌ Aucune carte dans le 1er groupe")
-            return False, None, None, None
-
-        logger.info(f"🎮 Jeu source: {game_number} → Cartes 1er groupe: {cards}")
-
-        predicted_suit = None
-        trigger_used = None
-        is_inter_prediction = False
-        rule_index = 0
-
-        # ======= MODE INTER : PRIORITÉ ABSOLUE (TOP 3 UNIQUEMENT) =======
-        if self.is_inter_mode_active and self.smart_rules:
-            rules_by_suit = defaultdict(list)
-            for rule in self.smart_rules:
-                rules_by_suit[rule['predict']].append(rule)
-
-            # Chercher dans les 3 TOP de chaque couleur
-            for suit in ['♠️', '♥️', '♦️', '♣️']:
-                suit_rules = sorted(rules_by_suit.get(suit, []), key=lambda x: x.get('count', 0), reverse=True)
-                top3 = suit_rules[:3]  # <-- TOP 3
-
-                for idx, rule in enumerate(top3):
-                    # ✅ Vérifier si le déclencheur est dans le 1er groupe
-                    # <-- MODIFICATION : Normaliser le déclencheur avant comparaison
-                    normalized_trigger = normalize_card(rule['trigger'])
-                    
-                    if normalized_trigger in cards:  # <-- COMPARAISON NORMALISÉE
-                        key = f"{rule['trigger']}_{rule['predict']}"
-                        
-                        # Vérifier quarantaine
-                        if key in self.quarantined_rules:
-                            qua_data = self.quarantined_rules[key]
-                            if isinstance(qua_data, dict) and time.time() < qua_data.get('expires_at', 0):
-                                logger.debug(f"🔒 Règle en quarantaine: {key}")
-                                continue
-                            elif not isinstance(qua_data, dict) and qua_data >= rule.get("count", 1):
-                                logger.debug(f"🔒 Règle en quarantaine: {key}")
-                                continue
-
-                        predicted_suit = rule['predict']
-                        trigger_used = rule['trigger']
-                        is_inter_prediction = True
-                        rule_index = idx + 1  # 1, 2 ou 3
-                        logger.info(f"🔮 INTER (TOP{rule_index}): {trigger_used} → {predicted_suit} (déclencheur normalisé: {normalized_trigger})")
-                        break
-                
-                if predicted_suit:
-                    break
-
-            # ✅ Si MODE INTER actif et pas de match → PAS DE PRÉDICTION (pas de fallback statique)
-            if not predicted_suit:
-                logger.debug("⚠️ MODE INTER actif: Aucune règle TOP3 ne match dans le 1er groupe")
-                return False, None, None, None
-
-        # ======= MODE STATIQUE : UTILISÉ UNIQUEMENT SI INTER EST INACTIF =======
-        elif not self.is_inter_mode_active:
-            # Vérifier l'écart SEULEMENT pour le mode statique
-            if self.last_predicted_game_number and (game_number - self.last_predicted_game_number < 3):
-                logger.debug(f"⏳ Écart insuffisant: {game_number - self.last_predicted_game_number} < 3")
-                return False, None, None, None
-
-            info = self.get_first_card_info(message)
-            if not info:
-                logger.debug("❌ Aucune info de carte trouvée")
-                return False, None, None, None
-            
-            first_card, _ = info
-            
-            # Vérifier si la première carte est dans une règle statique
-            if first_card in STATIC_RULES and first_card in cards:
-                predicted_suit = STATIC_RULES[first_card]
-                trigger_used = first_card
-                is_inter_prediction = False
-                rule_index = 0
-                logger.info(f"🔮 STATIQUE: {trigger_used} → {predicted_suit}")
+        # Calcul de l'offset pour l'affichage ✅0️⃣, ✅1️⃣, ✅2️⃣
+        offset = game_num - int(target_game)
+        
+        if found_in_group:
+            status = 'won'
+            # symbol = f"✅{chr(0x30 + offset)}️⃣" # Génère ✅0️⃣, ✅1️⃣, ✅2️⃣
+            if offset == 0: symbol = "✅0️⃣"
+            elif offset == 1: symbol = "✅1️⃣"
+            elif offset == 2: symbol = "✅2️⃣"
+            else: symbol = "✅"
+        else:
+            # Si on est au dernier essai (offset 2) et que c'est toujours pas bon
+            if offset >= 2:
+                status = 'lost'
+                symbol = "❌"
             else:
-                logger.debug(f"⚠️ MODE STATIQUE: Carte {first_card} non trouvée dans règles ou 1er groupe")
-                return False, None, None, None
+                # Sinon on attend encore le prochain numéro (n+1 ou n+2)
+                return {}
 
-        # ✅ Si une prédiction est trouvée (INTER ou STATIQUE), vérifier cooldown et lancer
-        if predicted_suit:
-            if self.last_prediction_time and time.time() < self.last_prediction_time + self.prediction_cooldown:
-                logger.debug("⏸️ Cooldown prédiction actif")
-                return False, None, None, None
-
-            self._last_rule_index = rule_index
-            self._last_trigger_used = trigger_used
-            return True, game_number, predicted_suit, is_inter_prediction
-
-        return False, None, None, None
-
-    def prepare_prediction_text(self, game_number_source: int, predicted_costume: str) -> str:
-        target_game = game_number_source + 2
-        text = f"🔵{target_game}🔵:{predicted_costume} statut :⏳"
-        logger.info(f"📝 Prédiction formatée: Jeu {game_number_source} → {target_game}, Costume: {predicted_costume} (Déclencheur: {self._last_trigger_used})")
-        return text
-
-    def make_prediction(self, game_number_source: int, suit: str, message_id_bot: int, is_inter: bool = False, trigger_used: Optional[str] = None):
-        target = game_number_source + 2
-        txt = self.prepare_prediction_text(game_number_source, suit)
-        
-        # Obtenir le déclencheur utilisé (priorité au paramètre, puis au stockage, puis par défaut '?')
-        if not trigger_used:
-            trigger_used = self._last_trigger_used or '?'
-        
-        self.predictions[target] = {
-            'predicted_costume': suit, 
-            'status': 'pending', 
-            'predicted_from': game_number_source, 
-            'predicted_from_trigger': trigger_used,
-            'message_text': txt, 
-            'message_id': message_id_bot, 
-            'is_inter': is_inter,
-            'rule_index': self._last_rule_index,
-            'timestamp': time.time()
-        }
-        
-        self.last_prediction_time = time.time()
-        self.last_predicted_game_number = game_number_source
-        self.consecutive_fails = 0
+        pred['status'] = status
         self._save_all_data()
-
-    # --- VERIFICATION LOGIQUE (CORRIGÉE) ---
-
-    def verify_prediction(self, message: str) -> Optional[Dict]:
-        """Vérifie une prédiction (message normal)"""
-        return self._verify_prediction_common(message, is_edited=False)
-
-    def verify_prediction_from_edit(self, message: str) -> Optional[Dict]:
-        """Vérifie une prédiction (message édité)"""
-        return self._verify_prediction_common(message, is_edited=True)
-
-    def check_costume_in_first_parentheses(self, message: str, predicted_costume: str) -> bool:
-        """Vérifie si le costume prédit est dans TOUTES les cartes du PREMIER groupe"""
-        # Récupérer TOUTES les cartes du premier groupe
-        all_cards_in_first_group = self.get_all_cards_in_first_group(message)
-        
-        if not all_cards_in_first_group:
-            logger.debug("🎯 Aucune carte trouvée dans le premier groupe")
-            return False
-        
-        # Normaliser le costume prédit (♥️ → ❤️ pour comparaison)
-        normalized_predicted = predicted_costume.replace("♥️", "❤️")
-        
-        logger.debug(f"🔍 Vérification costume {normalized_predicted} dans les cartes: {all_cards_in_first_group}")
-        
-        # Vérifier si au moins UNE carte du premier groupe a le costume prédit
-        for card in all_cards_in_first_group:
-            # Extraire correctement l'enseigne (émoji multi-byte)
-            card_suit = None
-            for suit in ["♠️", "❤️", "♦️", "♣️"]:
-                if suit in card:
-                    card_suit = suit
-                    break
-            
-            if card_suit == normalized_predicted:
-                logger.info(f"✅ Costume {normalized_predicted} trouvé dans la carte {card} du PREMIER groupe")
-                return True
-        
-        logger.debug(f"❌ Costume {normalized_predicted} non trouvé dans les cartes du premier groupe: {all_cards_in_first_group}")
-        return False
-
-    def _verify_prediction_common(self, message: str, is_edited: bool = False) -> Optional[Dict]:
-        """
-        Logique de vérification commune - UNIQUEMENT pour messages finalisés.
-        CORRECTION PRINCIPALE : Logique des offsets corrigée pour éviter l'erreur 'list' object has no attribute 'keys'
-        """
-        self.check_and_send_reports()
-        
-        game_number = self.extract_game_number(message)
-        if not game_number: 
-            logger.debug("❌ Aucun numéro de jeu trouvé")
-            return None
-        
-        logger.info(f"🔍 Vérification du jeu {game_number}...")
-        
-        # Validation Structurelle
-        is_structurally_valid = self.is_final_result_structurally_valid(message)
-        
-        if not is_structurally_valid: 
-            logger.debug(f"⚠️ Structure invalide pour jeu {game_number}")
-            return None
-
-        if not self.predictions: 
-            logger.debug("⚠️ Aucune prédiction en attente")
-            return None
-        
-        verification_result = None
-
-        # --- VÉRIFICATION SÉQUENTIELLE CORRIGÉE ---
-        # CORRECTION : Utilisation de .items() sur un dictionnaire garanti
-        for predicted_game, prediction in self.predictions.items():
-            if prediction.get('status') != 'pending': 
-                continue
-
-            predicted_costume = prediction.get('predicted_costume')
-            if not predicted_costume: 
-                continue
-
-            # ✅ CALCULER L'OFFSET RÉEL
-            offset = game_number - predicted_game
-            
-            found = False
-            status_symbol = None
-            
-            # ✅ VÉRIFIER SI ON EST DANS LA FENÊTRE [0, 1, 2]
-            if 0 <= offset <= 2:
-                costume_found = self.check_costume_in_first_parentheses(message, predicted_costume)
-                
-                if costume_found:
-                    # ✅ SUCCÈS : costume trouvé à l'offset calculé
-                    status_symbol = SYMBOL_MAP.get(offset, f"✅{offset}️⃣")
-                    logger.info(f"✅ SUCCÈS: Jeu {predicted_game} trouvé à +{offset} avec statut {status_symbol}")
-                    prediction['status'] = 'won'
-                    prediction['verification_count'] = offset
-                    found = True
-                
-                elif offset == 2:
-                    # ❌ DERNIER OFFSET : échec total
-                    status_symbol = SYMBOL_MAP['lost']
-                    logger.info(f"❌ ÉCHEC: Costume {predicted_costume} non trouvé au jeu {predicted_game}+2")
-                    prediction['status'] = 'lost'
-                    found = True
-                
-                # Si offset 0 ou 1 sans succès, ne rien faire (attendre le prochain jeu)
-            
-            # ✅ DÉPASSEMENT DE LA FENÊTRE
-            elif game_number > predicted_game + 2 and prediction.get('status') == 'pending':
-                status_symbol = SYMBOL_MAP['lost']
-                logger.info(f"❌ ÉCHEC: Jeu {game_number} dépasse la fenêtre {predicted_game}+2")
-                prediction['status'] = 'lost'
-                found = True
-            
-            # ✅ SI RÉSULTAT TROUVÉ (SUCCÈS OU ÉCHEC)
-            if found:
-                # Mettre à jour le message
-                updated_message = f"🔵{predicted_game}🔵:{predicted_costume} statut :{status_symbol}"
-                prediction['final_message'] = updated_message
-                
-                # 🔒 QUARANTAINE (uniquement si mode INTER)
-                if prediction.get('is_inter'):
-                    self._apply_quarantine(prediction)
-                    if prediction['status'] == 'lost':
-                        self.is_inter_mode_active = False 
-                        logger.info("❌ Échec INTER : Désactivation automatique + quarantaine.")
-                
-                # Gérer les échecs statiques
-                elif prediction['status'] == 'lost' and not prediction.get('is_inter'):
-                    self.consecutive_fails += 1
-                    if self.consecutive_fails >= 2:
-                        self.single_trigger_until = time.time() + 3600
-                        self.analyze_and_set_smart_rules(force_activate=True) 
-                        logger.info("⚠️ 2 Échecs Statiques : Activation INTER.")
-                else:
-                    if prediction['status'] == 'won':
-                        self.consecutive_fails = 0
-                
-                self._save_all_data()
-
-                verification_result = {
-                    'type': 'edit_message',
-                    'predicted_game': str(predicted_game),
-                    'new_message': updated_message,
-                    'message_id_to_edit': prediction.get('message_id')
-                }
-                break  # ✅ SORTIR - on a traité cette prédiction
-
-        return verification_result
-
-    def reset_automatic_predictions(self) -> Dict[str, int]:
-        """
-        Réinitialise les prédictions automatiques (non-INTER) sans toucher aux données Collect ni INTER.
-        Retourne le nombre de prédictions supprimées.
-        """
-        inter_predictions = {}
-        non_inter_count = 0
-        
-        inter_game_numbers = set()
-        for game_num, prediction in self.predictions.items():
-            if prediction.get('is_inter', False):
-                inter_predictions[game_num] = prediction
-                inter_game_numbers.add(game_num)
-            else:
-                non_inter_count += 1
-        
-        self.predictions = inter_predictions
-        
-        inter_message_ids = {pred.get('message_id') for pred in inter_predictions.values() if pred.get('message_id')}
-        new_pending_edits = {}
-        removed_pending = 0
-        for msg_id, edit_data in self.pending_edits.items():
-            game_num = edit_data.get('game_number')
-            if game_num in inter_game_numbers or msg_id in inter_message_ids:
-                new_pending_edits[msg_id] = edit_data
-            else:
-                removed_pending += 1
-        self.pending_edits = new_pending_edits
-        
-        self.last_prediction_time = 0
-        self.last_predicted_game_number = 0
-        self.consecutive_fails = 0
-        self.single_trigger_until = 0
-        
-        self._save_all_data()
-        
-        logger.info(f"🔄 Reset manuel: {non_inter_count} prédictions auto supprimées, {len(inter_predictions)} INTER conservées")
         
         return {
-            'removed': non_inter_count,
-            'kept_inter': len(inter_predictions),
-            'removed_pending': removed_pending
+            'type': 'edit_message', 
+            'message_id_to_edit': pred['message_id'], 
+            'new_message': f"🔵{target_game}🔵:{pred['predicted_costume']}statut :{symbol}",
+            'offset': offset # Retourner l'offset pour la réaction
         }
 
-# Global instance
-card_predictor = CardPredictor()
+    def get_session_report_preview(self) -> str:
+        # On ne compte que les prédictions terminées (won ou lost)
+        finished_preds = [p for p in self.predictions.values() if p.get('status') in ['won', 'lost']]
+        total = len(finished_preds)
+        won = sum(1 for p in finished_preds if p.get('status') == 'won')
+        lost = sum(1 for p in finished_preds if p.get('status') == 'lost')
+        
+        # Calcul du taux basé sur les prédictions terminées
+        rate = (won / total * 100) if total > 0 else 0
+        
+        return (f"📊 **BILAN 24h/24**\n\n"
+                f"📝 Total prédictions : {total}\n"
+                f"✅ Gagnés : {won}\n"
+                f"❌ Perdus : {lost}\n"
+                f"📈 Taux : {rate:.1f}%")
+
+    def get_inter_status(self) -> Tuple[str, Dict]:
+        is_active = self.is_inter_mode_active
+        total_collected = len(self.inter_data)
+        
+        # Nettoyage des tops supprimés de plus de 1h (3600 secondes)
+        now_ts = time.time()
+        self.deleted_tops = [dt for dt in self.deleted_tops if isinstance(dt, dict) and now_ts - dt.get('time', 0) < 3600]
+        self._save_all_data()
+        
+        message = f"🧠 **MODE INTER - {'✅ ACTIF' if is_active else '❌ INACTIF'}**\n\n"
+        
+        if self.deleted_tops:
+            message += "Les 10 dernier tops supprimer (Expirent après 1h)\n"
+            for dt in self.deleted_tops:
+                if isinstance(dt, dict):
+                    message += f"{dt.get('text')}\n"
+                else:
+                    message += f"{dt}\n"
+            message += "\n"
+            
+            message += f"📊 {len(self.smart_rules)} règles créées ({total_collected} jeux analysés):\n\n"
+        
+        # Regrouper par enseigne de prédiction
+        rules_by_suit = defaultdict(list)
+        for rule in self.smart_rules:
+            rules_by_suit[rule['predict']].append(rule)
+            
+        for suit in ['♠️', '♥️', '♦️', '♣️']:
+            suit_display = suit.replace("♥️", "❤️")
+            message += f"Pour prédire {suit_display}:\n"
+            if suit in rules_by_suit or suit.replace("❤️", "♥️") in rules_by_suit:
+                actual_suit = suit if suit in rules_by_suit else suit.replace("❤️", "♥️")
+                # On affiche les 7 meilleures règles par enseigne
+                for r in rules_by_suit[actual_suit][:7]:
+                    trigger_display = r['trigger'].replace("♥️", "❤️")
+                    message += f"  • {trigger_display} ({r['count']}x)\n"
+            message += "\n"
+        
+        kb = {'inline_keyboard': [[{'text': '🔄 Actualiser Analyse', 'callback_data': 'inter_apply'}]]}
+        return message, kb
