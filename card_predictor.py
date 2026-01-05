@@ -221,8 +221,7 @@ class CardPredictor:
 
     def prepare_prediction_text(self, game_num: int, suit: str, ki: int = 0, show_ki: bool = False) -> str:
         # On utilise une entité invisible pour stocker le ki sans qu'il soit vu
-        # Ajout d'un petit texte invisible pour forcer le changement de contenu si ki change
-        # Correction: On utilise un espace insécable plutôt qu'un commentaire HTML qui cause des erreurs de parsing
+        # Correction: On utilise un espace insécable (\u200b) au lieu des commentaires HTML
         invisible_ki = f"<a href='tg://user?id={ki}'>\u200b</a>"
         ki_display = f" {ki}" if show_ki else "\u200b"
         # On ajoute le ki au milieu en bas avec un sablier par défaut
