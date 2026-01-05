@@ -44,7 +44,7 @@ class Config:
     
     def _get_bot_token(self) -> str:
         """Récupère et valide le token du bot depuis les variables d'environnement."""
-        token = os.getenv('BOT_TOKEN')
+        token = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('BOT_TOKEN')
         
         if not token:
             logger.error("❌ BOT_TOKEN manquant !")

@@ -126,7 +126,7 @@ class TelegramBot:
             return {}
 
 # Global instance
-bot_token = os.getenv('BOT_TOKEN')
+bot_token = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('BOT_TOKEN')
 if not bot_token:
     logger.error("🚨 BOT_TOKEN manquant dans l'environnement !")
     # On laisse le bot s'initialiser mais il échouera aux appels API

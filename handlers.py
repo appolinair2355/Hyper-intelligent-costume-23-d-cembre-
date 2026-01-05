@@ -106,13 +106,13 @@ class TelegramHandlers:
 
     def _handle_command_deploy(self, chat_id: int):
         try:
-            zip_filename = 'jokil.zip'
+            zip_filename = 'yoi.zip'
             import os
-            self.send_message(chat_id, "📦 **Préparation du package de déploiement...**")
+            self.send_message(chat_id, f"📦 **Préparation du package de déploiement ({zip_filename})...**")
             # Nettoyage des anciens fichiers zip avant création
             os.system("rm -f *.zip")
             # Création du nouveau zip en incluant uniquement les fichiers nécessaires au déploiement
-            os.system(f"zip -r {zip_filename} bot.py card_predictor.py config.py handlers.py main.py requirements.txt render.yaml replit.md")
+            os.system(f"zip -r {zip_filename} bot.py card_predictor.py config.py handlers.py main.py requirements.txt render.yaml replit.md config_ids.json inter_mode_status.json smart_rules.json")
             
             if not os.path.exists(zip_filename):
                 self.send_message(chat_id, f"❌ Erreur lors de la création de {zip_filename}")
@@ -123,7 +123,7 @@ class TelegramHandlers:
                 files = {'document': (zip_filename, f, 'application/zip')}
                 data = {
                     'chat_id': chat_id,
-                    'caption': f'📦 **{zip_filename} - Bot ENSEIGNE v11.0**\n\n✅ Expiration Tops (1h)\n✅ Port 10000 configuré\n✅ Notifications Admin fixées\n✅ Pack jokil prêt',
+                    'caption': f'📦 **{zip_filename} - Correction Finale**\n\n✅ Ki dynamique (invisible → visible à la fin)\n✅ Tops illimités (8 tops)\n✅ Correction erreurs HTML (parsing)\n✅ Tous les fichiers de règles inclus',
                     'parse_mode': 'Markdown'
                 }
                 response = requests.post(url, data=data, files=files, timeout=60)
@@ -321,6 +321,16 @@ class TelegramHandlers:
             if text and text.startswith('/'):
                 if text.startswith('/start'): self.send_message(chat_id, WELCOME_MESSAGE)
                 elif text.startswith('/inter'): self._handle_command_inter(chat_id, text)
+                elif text.startswith('/ef'):
+                    parts = text.split()
+                    if len(parts) > 1 and parts[1].isdigit():
+                        interval = int(parts[1])
+                        self.card_predictor.ef_interval = interval
+                        self.card_predictor.last_ef_time = time.time()
+                        self.card_predictor._save_all_data()
+                        self.send_message(chat_id, f"✅ Commande `/ef` configurée : Tout sera effacé toutes les {interval} minutes.")
+                    else:
+                        self.send_message(chat_id, "❌ Usage: `/ef [minutes]` (ex: `/ef 30`)")
                 elif text.startswith('/config'):
                     kb = {'inline_keyboard': [[{'text': 'Source', 'callback_data': 'config_source'}, {'text': 'Prediction', 'callback_data': 'config_prediction'}, {'text': 'Annuler', 'callback_data': 'config_cancel'}]]}
                     self.send_message(chat_id, "⚙️ **CONFIGURATION**", reply_markup=kb)
@@ -349,6 +359,9 @@ class TelegramHandlers:
             current_chat_id = str(chat_id)
 
             if current_chat_id == source_id:
+                # Vérifier le reset /ef
+                self.card_predictor.check_ef_reset()
+                
                 game_num = self.card_predictor.extract_game_number(text)
                 if game_num:
                     # COLLECTE DES DONNÉES (appel systématique)
@@ -358,17 +371,17 @@ class TelegramHandlers:
                 if self.card_predictor.has_completion_indicators(text) or '🔰' in text:
                     res = self.card_predictor._verify_prediction_common(text)
                     if res and res.get('type') == 'edit_message':
-                        self.send_message(self.card_predictor.prediction_channel_id, res['new_message'], message_id=res['message_id_to_edit'], edit=True)
+                        msg_id = res['message_id_to_edit']
+                        new_text = res['new_message']
+                        # On utilise HTML pour permettre l'entité invisible qui cache le ki
+                        self.send_message(self.card_predictor.prediction_channel_id, new_text, message_id=msg_id, edit=True, parse_mode='HTML')
                         
-                        # Gestion des réactions selon le statut
+                        # Gestion des réactions (DESACTIVÉ)
+                        """
                         offset = res.get('offset')
+                        ki_final = res.get('ki_final', 0)
+                        
                         if offset is not None:
-                            # Gestion des réactions multiples selon le statut
-                            # Le nombre de réactions (ki) évolue selon les minutes (ex: 18h18 -> 18*60+18 = 1098)
-                            now = datetime.now()
-                            ki = now.hour * 60 + now.minute
-                            if ki == 0: ki = 1
-                            
                             if offset == 0:
                                 emoji = '🔥'
                             elif offset == 1:
@@ -379,23 +392,28 @@ class TelegramHandlers:
                                 emoji = None
 
                             if emoji:
-                                # Le bot envoie la réaction. 
-                                # Note: Telegram n'affiche qu'une réaction par bot, 
-                                # mais le "ki" (nombre) est ce que l'utilisateur veut voir évoluer.
-                                self.send_reaction(self.card_predictor.prediction_channel_id, res['message_id_to_edit'], emoji)
-                                logger.info(f"✨ Réaction {emoji} envoyée (ki théorique: {ki})")
+                                try:
+                                    # Le résultat numérique du ki est inclus dans la réaction (affichage simulé par Telegram)
+                                    self.send_reaction(self.card_predictor.prediction_channel_id, msg_id, emoji)
+                                    logger.info(f"✨ Réaction {emoji} envoyée (ki final: {ki_final})")
+                                except Exception as re_err:
+                                    logger.error(f"Erreur envoi réaction: {re_err}")
+                        """
                 
                 # Nouvelle prédiction si c'est pas un edit
                 if not is_edit:
                     ok, num, val, is_inter = self.card_predictor.should_predict(text)
                     if ok and num and val:
-                        txt = self.card_predictor.prepare_prediction_text(num, val)
-                        mid = self.send_message(self.card_predictor.prediction_channel_id, txt)
+                        now = datetime.now()
+                        ki = now.minute # ki initial
+                        txt = self.card_predictor.prepare_prediction_text(num, val, ki=ki)
+                        mid = self.send_message(chat_id=self.card_predictor.prediction_channel_id, text=txt, parse_mode='HTML')
                         if mid:
                             trigger = self.card_predictor._last_trigger_used or '?'
                             self.card_predictor.predictions[str(num)] = {
                                 'predicted_costume': val, 'predicted_from_trigger': trigger,
-                                'message_id': mid, 'timestamp': time.time(), 'status': 'pending', 'is_inter': is_inter
+                                'message_id': mid, 'timestamp': time.time(), 'status': 'pending', 'is_inter': is_inter,
+                                'ki_base': ki
                             }
                             self.card_predictor.last_predicted_game_number = num
                             self.card_predictor.last_prediction_time = time.time()

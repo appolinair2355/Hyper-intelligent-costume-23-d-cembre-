@@ -2,6 +2,7 @@
 
 import os
 import logging
+import time
 from datetime import datetime
 import pytz
 from flask import Flask, request
@@ -126,6 +127,41 @@ def send_session_reports():
     except Exception as e:
         logger.error(f"❌ Report error: {e}")
 
+def update_pending_ki():
+    """Tâche planifiée pour mettre à jour le ki des prédictions en attente chaque minute"""
+    try:
+        from bot import telegram_bot
+        if telegram_bot and hasattr(telegram_bot, 'handlers') and telegram_bot.handlers.card_predictor:
+            cp = telegram_bot.handlers.card_predictor
+            now = datetime.now(pytz.timezone('Africa/Porto-Novo'))
+            
+            for game_num, pred in list(cp.predictions.items()):
+                if pred.get('status') == 'pending':
+                    msg_id = pred['message_id']
+                    suit = pred['predicted_costume']
+                    ki_base = pred.get('ki_base', 0)
+                    
+                    # Le ki actuel est le temps écoulé depuis la prédiction (en minutes) + ki_base
+                    start_time = pred.get('timestamp', time.time())
+                    elapsed_min = int((time.time() - start_time) / 60)
+                    current_ki = ki_base + elapsed_min
+                    
+                    # On ne met à jour que si le ki a changé pour éviter l'erreur "message is not modified"
+                    if pred.get('last_updated_ki') == current_ki:
+                        continue
+                    
+                    # Mise à jour du message (ki toujours masqué dans le texte, mais stocké dans l'entité invisible)
+                    # On ne l'affiche visiblement que lors de la validation (statut won/lost)
+                    new_text = cp.prepare_prediction_text(game_num, suit, ki=current_ki, show_ki=False)
+                    
+                    # On utilise l'API pour éditer
+                    success_mid = telegram_bot.handlers.send_message(cp.prediction_channel_id, new_text, message_id=msg_id, edit=True, parse_mode='HTML')
+                    if success_mid:
+                        pred['last_updated_ki'] = current_ki
+                    logger.debug(f"⏰ Ki dynamique mis à jour pour Jeu {game_num} (ki={current_ki})")
+    except Exception as e:
+        logger.error(f"❌ Erreur mise à jour ki dynamique: {e}")
+
 def setup_scheduler():
     """Configure the background scheduler for tasks"""
     try:
@@ -143,7 +179,17 @@ def setup_scheduler():
             timezone=benin_tz,
             id='inter_analysis_job',
             replace_existing=True,
-            next_run_time=datetime.now(benin_tz) # Lancer immédiatement au démarrage
+            next_run_time=datetime.now(benin_tz)
+        )
+        
+        # Mise à jour dynamique du ki chaque minute
+        scheduler.add_job(
+            update_pending_ki,
+            'interval',
+            minutes=1,
+            timezone=benin_tz,
+            id='dynamic_ki_job',
+            replace_existing=True
         )
         
         # Reports at specific hours
@@ -151,20 +197,20 @@ def setup_scheduler():
             scheduler.add_job(send_session_reports, 'cron', hour=hour, minute=0, timezone=benin_tz)
             
         scheduler.start()
-        logger.info("⏰ Scheduler started (Benin TZ) - Analysis every 10m")
+        logger.info("⏰ Scheduler started (Benin TZ) - Analysis every 10m + Dynamic Ki every 1m")
     except Exception as e:
         logger.error(f"❌ Scheduler setup error: {e}")
 
 def run_inter_analysis():
     """Task function for the scheduler"""
     try:
+        from bot import telegram_bot
         if telegram_bot and hasattr(telegram_bot, 'handlers') and telegram_bot.handlers.card_predictor:
             logger.info("🔄 Lancement de l'analyse automatique INTER...")
             predictor = telegram_bot.handlers.card_predictor
             predictor.analyze_and_set_smart_rules()
             
             # Envoyer notification de mise à jour réussie à l'admin (le compte de l'utilisateur)
-            # On utilise l'ID de l'utilisateur (ADMIN_ID) car un bot ne peut pas se parler à lui-même
             target_id = os.getenv('ADMIN_ID')
             if target_id and predictor.telegram_message_sender:
                 now = datetime.now(pytz.timezone('Africa/Porto-Novo'))
@@ -172,10 +218,8 @@ def run_inter_analysis():
                        f"✅ Analyse INTER effectuée avec succès.\n"
                        f"📊 {len(predictor.smart_rules)} règles actives.\n"
                        f"🕒 Dernière mise à jour : {now.strftime('%H:%M:%S')}\n"
-                       f"🚀 Les 7 tops sont réellement à jour.")
-                # Utiliser send_message du bot global pour être sûr de passer par l'API
-                from bot import telegram_bot
-                telegram_bot.send_message(target_id, msg)
+                       f"🚀 Les 8 tops sont réellement à jour.")
+                telegram_bot.handlers.send_message(int(target_id), msg)
                 logger.info(f"📢 Notification de mise à jour envoyée à l'ID {target_id}")
             else:
                 logger.warning("⚠️ ADMIN_ID non configuré, impossible d'envoyer la notification.")
